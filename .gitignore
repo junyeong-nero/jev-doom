@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets — JEV_APIKEY lives in .env, never commit
+.env
+.env.*
+
+# Doom / experiment artifacts
+runs/
+*.lmp
+_vizdoom.ini
