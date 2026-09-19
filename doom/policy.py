@@ -6,8 +6,8 @@ import httpx
 from . import config as C
 
 
-def decide(client: httpx.Client, snapshot: dict) -> tuple[dict, float]:
-    """One system_one call. Returns (answers, latency_ms)."""
+def decide(client: httpx.Client, snapshot: dict) -> tuple[dict, dict, float]:
+    """One system_one call. Returns (answers, usage, latency_ms)."""
     questions = dict(C.QUESTIONS)
     questions["fire"] = {
         **questions["fire"],
@@ -22,7 +22,8 @@ def decide(client: httpx.Client, snapshot: dict) -> tuple[dict, float]:
         json=body,
     )
     r.raise_for_status()
-    return r.json()["answers"], (time.time() - t0) * 1000
+    data = r.json()
+    return data["answers"], data.get("usage", {}), (time.time() - t0) * 1000
 
 
 def to_action(answers: dict, snapshot: dict,

@@ -18,7 +18,8 @@ from .encoder import encode
 from .policy import decide, to_action
 
 
-def run_episode(game, client, log, scenario: str = "defend") -> dict:
+def run_episode(game, client, log, scenario: str = "defend",
+                frames: list | None = None) -> dict:
     game.new_episode()
     decisions, latencies, shots = 0, [], 0
     last_turn = None
@@ -26,9 +27,11 @@ def run_episode(game, client, log, scenario: str = "defend") -> dict:
         state = game.get_state()
         if state is None:
             break
+        if frames is not None and state.screen_buffer is not None:
+            frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
         snapshot = encode(state, list(state.game_variables))
         try:
-            answers, ms = decide(client, snapshot)
+            answers, usage, ms = decide(client, snapshot)
         except Exception as e:  # Jev hiccup -> hold, keep episode alive
             print(f"  [warn] jev error: {e}, holding", flush=True)
             game.make_action([0, 0, 0], C.TURN_TICS)
@@ -50,6 +53,8 @@ def run_episode(game, client, log, scenario: str = "defend") -> dict:
             "fire": round(answers["fire"]["noul"], 3),
             "danger": round(answers["danger"]["score"], 2),
             "action": action, "reason": reason, "ms": round(ms),
+            "in_tok": usage.get("input_tokens", 0),
+            "out_tok": usage.get("output_tokens", 0),
             "hp": snapshot["player"]["health"],
             "ammo": snapshot["player"]["ammo"],
             "kills": snapshot["player"]["kills"],
@@ -78,6 +83,8 @@ def main() -> None:
     ap.add_argument("--episodes", type=int, default=1)
     ap.add_argument("--visible", action="store_true")
     ap.add_argument("--timeout", type=int, default=2100)
+    ap.add_argument("--record", action="store_true",
+                    help="save screen frames to runs/<ts>_frames.npz")
     args = ap.parse_args()
 
     if not C.API_KEY:
@@ -94,10 +101,16 @@ def main() -> None:
             for ep in range(args.episodes):
                 path = run_dir / f"{ts}_{args.scenario}_ep{ep}.jsonl"
                 print(f"episode {ep} -> {path}", flush=True)
+                frames = [] if args.record else None
                 with open(path, "w") as f:
                     def log(obj, f=f):
                         f.write(json.dumps(obj) + "\n")
-                    s = run_episode(game, client, log, args.scenario)
+                    s = run_episode(game, client, log, args.scenario, frames)
+                if frames:
+                    import numpy as np
+                    fpath = run_dir / f"{ts}_{args.scenario}_ep{ep}_frames.npz"
+                    np.savez_compressed(fpath, frames=np.stack(frames))
+                    print(f"saved {len(frames)} frames -> {fpath}", flush=True)
                 import vizdoom as vzd
                 s.update({
                     # post-episode ground truth (log lines are pre-action snapshots)
