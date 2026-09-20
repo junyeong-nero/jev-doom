@@ -35,11 +35,10 @@ lead) but keeps its `_extend` loop.
   `{action, hp_change, ammo_used, kills_change}`, oldest first. `last`
   is kept (readers, `_kite_ok`).
 - Latency lead: new keyword `lead: dict | None`,
-  `{"tics": int, "turn": -1|0|+1}`. Player angle is advanced by
-  `TURN_DEG_PER_TIC × tics × turn` (right-positive sign convention:
-  `turn=+1` means TURN_RIGHT, bearing of a fixed object decreases…
-  verify sign against a live turn in tests using a synthetic state, then
-  against one recorded run). Enemy positions are extrapolated by
+  `{"tics": int, "turn": -1|0|+1}` where `turn=+1` is TURN_RIGHT.
+  Predicted angle = `angle − TURN_DEG_PER_TIC × tics × turn`: bearing is
+  `angle − abs_deg` (right-positive), so turning right lowers `angle`
+  and pulls a right-side target toward 0. Enemy positions are extrapolated by
   `velocity × tics` before bearing/dist. Snapshot exposes `lead_tics`.
   `lead=None` → identical output to today (log/replay compat).
 
