@@ -47,6 +47,7 @@ SCENARIOS = {
             vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT,
             vzd.Button.TURN_LEFT, vzd.Button.TURN_RIGHT,
             vzd.Button.ATTACK,
+            vzd.Button.SPEED,  # appended: ATTACK stays idx 6 (see ATTACK_IDX)
         ],
         "variables": [
             vzd.GameVariable.HEALTH,

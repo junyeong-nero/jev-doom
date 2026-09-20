@@ -7,7 +7,8 @@ Usage:
     uv run python -m doom.human --scenario defend
     uv run python -m doom.human --scenario simple --episodes 2
 
-Controls: LEFT/RIGHT (or A/D) = turn/strafe, SPACE = fire, ESC = quit.
+Controls: WASD = move, LEFT/RIGHT = turn, SHIFT = run (SPEED),
+SPACE = fire, ESC = quit (corridor); otherwise arrows + space.
 """
 import argparse
 import datetime
@@ -24,11 +25,12 @@ LOG_EVERY_TICS = 7
 
 def read_action(keys, scenario: str = "defend") -> list:
     if scenario == "corridor":
-        # [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK]
+        # [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK, SPEED]
+        speed = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
         return [int(bool(keys[pygame.K_w])), int(bool(keys[pygame.K_s])),
                 int(bool(keys[pygame.K_a])), int(bool(keys[pygame.K_d])),
                 int(bool(keys[pygame.K_LEFT])), int(bool(keys[pygame.K_RIGHT])),
-                int(bool(keys[pygame.K_SPACE]))]
+                int(bool(keys[pygame.K_SPACE])), int(bool(speed))]
     left = keys[pygame.K_LEFT] or keys[pygame.K_a]
     right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
     fire = keys[pygame.K_SPACE]
@@ -105,8 +107,8 @@ def main() -> None:
     try:
         for ep in range(args.episodes):
             path = run_dir / f"{ts}_human_{args.scenario}_ep{ep}.jsonl"
-            print(f"episode {ep}: play! (corridor: WASD + arrows + space | "
-          f"others: arrows + space, ESC quits)", flush=True)
+            print(f"episode {ep}: play! (corridor: WASD + arrows + space, "
+                  f"SHIFT = run | others: arrows + space, ESC quits)", flush=True)
             with open(path, "w") as f:
                 def log(obj, f=f):
                     f.write(json.dumps(obj) + "\n")
