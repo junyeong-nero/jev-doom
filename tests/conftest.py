@@ -3,8 +3,9 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-# [HEALTH, AMMO2, KILLCOUNT, ANGLE, HITS_TAKEN, DAMAGECOUNT]
-VARS = [100.0, 26.0, 0.0, 0.0, 0.0, 0.0]
+# Corridor game vars: [HEALTH, AMMO2, KILLCOUNT, ANGLE, HITS_TAKEN,
+# DAMAGECOUNT, SELECTED_WEAPON, SELECTED_WEAPON_AMMO, WEAPON3, AMMO1]
+VARS = [100.0, 52.0, 0.0, 0.0, 0.0, 0.0, 2.0, 52.0, 0.0, 0.0]
 
 
 def obj(id, name, x, y, vx=0.0, vy=0.0):
@@ -12,8 +13,8 @@ def obj(id, name, x, y, vx=0.0, vy=0.0):
               velocity_x=vx, velocity_y=vy)
 
 
-def label(object_id, x=150, width=20, category="Monster"):
-    # 320px-wide screen assumed by encoder when screen_buffer is None
+def label(object_id, x=310, width=20, category="Monster"):
+    # 640px-wide screen assumed by encoder when screen_buffer is None
     return NS(object_id=object_id, x=x, width=width, object_category=category)
 
 
@@ -45,7 +46,7 @@ class FakeGame:
                 and len(self.calls) >= self.finished_after)
 
     def get_available_buttons(self):
-        return [None, None, None]
+        return [None] * 9
 
 
 @pytest.fixture

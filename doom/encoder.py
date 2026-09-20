@@ -1,8 +1,8 @@
-"""Game state -> Jev JSON snapshot.
+"""Game state -> snapshot dict.
 
 Uses objects_info (world coords, velocity, visibility) + ANGLE game variable.
-No pixels touch Jev: everything numeric/textual, with units documented in
-the question instructions (bearings in degrees, right-positive).
+No pixels touch the brain: everything numeric/textual, with units documented
+in code (bearings in degrees, right-positive).
 """
 import math
 
@@ -129,7 +129,7 @@ def encode(state, game_vars, last: dict | None = None,
 
     last: feedback from the previous decision
     {"action": str, "hp_change": float, "ammo_used": float, "kills_change": int}
-    so Jev can see the consequences of its last pick.
+    so the brain can see the consequences of its last pick.
 
     focus: current engagement-lock target
     {"id": int, "type": str, "bearing": float, "engaged": int}
@@ -166,7 +166,7 @@ def encode(state, game_vars, last: dict | None = None,
                   for label in (state.labels or [])}
     labels_by_id = {label.object_id: label for label in (state.labels or [])}
     # Screen width for the label x-error: derive from the frame when
-    # available (320 wide -> center 160px), else assume 320.
+    # available (640 wide -> center 320px), else assume 640.
     screen_w = 320
     sb = getattr(state, "screen_buffer", None)
     if sb is not None and getattr(sb, "ndim", 0) == 3:
@@ -198,7 +198,7 @@ def encode(state, game_vars, last: dict | None = None,
         vx, vy = float(o.velocity_x), float(o.velocity_y)
         closing = (vx * dx + vy * dy) / dist < -1.0
         # Screen-x centering error (pixels, + = right of center) from the
-        # label box, so Jev can micro-adjust. Off-screen: None.
+        # label box, so the brain can micro-adjust. Off-screen: None.
         x_err = None
         lb = labels_by_id.get(o.id)
         if o.id in visible_ids and lb is not None:
@@ -219,7 +219,7 @@ def encode(state, game_vars, last: dict | None = None,
     enemies.sort(key=lambda e: (not e["visible"], e["dist"]))
     enemies = enemies[:MAX_ENEMIES]
     for i, e in enumerate(enemies, 1):
-        e["idx"] = i  # question keys: Jev picks an enemy by this index
+        e["idx"] = i  # stable per-snapshot key for the picked enemy
 
     sectors = {}
     for name, lo, hi in (("left", -180, -C.CENTER_DEGREES),
