@@ -38,6 +38,10 @@ def decide(client: httpx.Client, snapshot: dict,
 _dodge_side = "strafe_left"
 _corridor_decisions = 0
 
+#: Issue-15 scan state: next low-confidence defend turn. Alternates
+#: L,R,L,R... module-global like _dodge_side (4-tic holds).
+_scan_turn = [0, 1, 0]
+
 
 def _close_threat_ahead(snapshot: dict) -> bool:
     """A close-range threat straight ahead (kiting target)?"""
@@ -84,12 +88,14 @@ OPENING_SPRINT = 6
 def reset_episode() -> None:
     global _corridor_decisions, _last_seen, _prev_hits
     global _cover_active, _cover_visible_before, _cover_ttl
+    global _scan_turn
     _corridor_decisions = 0
     _last_seen = None
     _prev_hits = None
     _cover_active = False
     _cover_visible_before = 0
     _cover_ttl = 0
+    _scan_turn = [0, 1, 0]
 
 
 def _visible_count(snapshot: dict) -> int:
@@ -288,7 +294,7 @@ def to_action(answers: dict, snapshot: dict,
               after_turn: bool = False) -> tuple[list, int, str]:
     """Map answers to ([left, right, attack], hold_tics, reason).
 
-    last_turn: previous turn vector ([1,0,0] or [0,1,0]) for sweep hysteresis.
+    last_turn: unused (kept for call compatibility; low-conf now scans).
     after_turn: previous action was a turn -> one observation decision
         (anti-overshoot) before turning again.
     """
@@ -333,7 +339,9 @@ def to_action(answers: dict, snapshot: dict,
             return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
         return [0, 0, 0], C.TURN_TICS, "aim center"
 
-    # low confidence: keep sweeping instead of jittering
-    if last_turn in ([1, 0, 0], [0, 1, 0]):
-        return last_turn, C.TURN_TICS, f"sweep conf={aim['confidence']:.2f}"
-    return [0, 0, 0], C.TURN_TICS, f"hold conf={aim['confidence']:.2f}"
+    # low confidence: alternating scan turns instead of freezing
+    # (sweep/hold left the bot standing still while taking fire).
+    global _scan_turn
+    _scan_turn = ([0, 1, 0] if _scan_turn == [1, 0, 0] else [1, 0, 0])
+    side = "left" if _scan_turn == [1, 0, 0] else "right"
+    return _scan_turn, C.TURN_TICS, f"scan {side} conf={aim['confidence']:.2f}"
