@@ -47,6 +47,7 @@ def run_episode(game, client, log, scenario: str = "defend",
     reset_episode()
     decisions, latencies, shots = 0, [], 0
     last_turn = None
+    after_turn = False  # previous action was a turn -> observe once
     prev = None  # feedback for the next snapshot
     while not game.is_episode_finished():
         state = game.get_state()
@@ -64,7 +65,8 @@ def run_episode(game, client, log, scenario: str = "defend",
             game.make_action([0] * len(game.get_available_buttons()),
                              C.TURN_TICS)
             continue
-        action, tics, reason = to_action(answers, snapshot, last_turn, scenario)
+        action, tics, reason = to_action(answers, snapshot, last_turn,
+                                         scenario, after_turn=after_turn)
         if action[atk_idx]:
             shots += 1
             _step(game, action, tics, frames)
@@ -74,6 +76,7 @@ def run_episode(game, client, log, scenario: str = "defend",
             _step(game, action, tics, frames)
         if action in ([1, 0, 0], [0, 1, 0]):
             last_turn = action
+        after_turn = action in ([1, 0, 0], [0, 1, 0])
         decisions += 1
         latencies.append(ms)
         # Feedback for the next decision: what the last pick cost/gained.
