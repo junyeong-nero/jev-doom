@@ -116,6 +116,39 @@ Corridor is genuinely brutal: six hitscanners focus-firing at skill 5 melt
 100hp in ~3 game-seconds in the open. Progress (not kills) is the score;
 tactics that mattered: opening sprint, strafe-fire, never trading stationary.
 
+### Seeded evaluation (fixed suite 1–5)
+
+```sh
+uv run python -m doom.play --scenario defend --suite  # seeds 1..5
+uv run python -m doom.play --scenario defend --seed 1 # single seeded run
+uv run python -m doom.compare                         # per-seed table + mean/std
+```
+
+`game.set_seed(seed)` is called before each `new_episode`; the seed lands in
+log filenames (`..._ep0_seed1.jsonl`) and `.summary.json`. Unseeded logs
+render exactly as before.
+
+Latest defend suite (2026-09-20):
+
+| seed | kills | bullets | acc | reward |
+|---|---|---|---|---|
+| 1 | 1 | 2 | 0.50 | 1 |
+| 2 | 1 | 1 | 1.00 | 1 |
+| 3 | 1 | 1 | 1.00 | 1 |
+| 4 | 1 | 1 | 1.00 | 1 |
+| 5 | 1 | 1 | 1.00 | 1 |
+| mean±std | 1.00±0.00 | — | — | 1±0 |
+
+Seeded defend (1 kill each) sits well below the unseeded best (4 kills) —
+spawn decides a lot, which is exactly why the suite exists.
+
+Caveat (verified): the *game* is deterministic under a fixed seed — scripted
+actions, same seed twice → byte-identical frames + variables on defend
+(60 steps) and corridor (22 steps incl. death timing); different seeds
+diverge. *Jev* is not — two identical seed-1 runs gave 26 vs 28 decisions
+(d1 fire 0.68 vs 0.70). Same outcome here (1 kill), but treat single runs as
+samples and compare suite mean/std.
+
 ## Cost (measured, 10-decision corridor episode, v2 context)
 
 Per decision: 1389 input / 109 output tokens, ~290ms.

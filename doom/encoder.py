@@ -67,22 +67,32 @@ def _bucket(dist: float) -> str:
     return "far"
 
 
-def encode(state, game_vars, last: dict | None = None) -> dict:
+def encode(state, game_vars, last: dict | None = None,
+           focus: dict | None = None) -> dict:
     """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?,
-    selected_weapon?, selected_weapon_ammo?, shotgun_owned?, shells?].
+    hits_taken?, damage?, selected_weapon?, selected_weapon_ammo?,
+    shotgun_owned?, shells?].
 
     last: feedback from the previous decision
     {"action": str, "hp_change": float, "ammo_used": float, "kills_change": int}
     so Jev can see the consequences of its last pick.
+
+    focus: current engagement-lock target
+    {"id": int, "type": str, "bearing": float, "engaged": int}
+    (last-seen bearing while the target is off-screen). None when no lock.
     """
     health, ammo, kills = (float(game_vars[i]) for i in range(3))
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
-    # Corridor-only weapon vars (doom_env appends them after ANGLE);
+    # Issue-3: appended by doom_env (HITS_TAKEN, DAMAGECOUNT). Length-guarded
+    # so older recordings / builds without them still decode.
+    hits_taken = float(game_vars[4]) if len(game_vars) > 4 else None
+    damage = float(game_vars[5]) if len(game_vars) > 5 else None
+    # Issue-4: corridor-only weapon vars, AFTER the damage counters ([6..9]);
     # -1/0 defaults on scenarios that don't expose them.
-    selected = int(game_vars[4]) if len(game_vars) > 4 else -1
-    selected_ammo = int(game_vars[5]) if len(game_vars) > 5 else -1
-    shotgun_owned = bool(game_vars[6]) if len(game_vars) > 6 else False
-    shells = int(game_vars[7]) if len(game_vars) > 7 else 0
+    selected = int(game_vars[6]) if len(game_vars) > 6 else -1
+    selected_ammo = int(game_vars[7]) if len(game_vars) > 7 else -1
+    shotgun_owned = bool(game_vars[8]) if len(game_vars) > 8 else False
+    shells = int(game_vars[9]) if len(game_vars) > 9 else 0
 
     px, py = 0.0, 0.0
     for o in state.objects or []:
@@ -95,6 +105,15 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
     visible_ids = {label.object_id for label in (state.labels or [])}
     categories = {label.object_id: getattr(label, "object_category", "")
                   for label in (state.labels or [])}
+    labels_by_id = {label.object_id: label for label in (state.labels or [])}
+    # Screen width for the label x-error: derive from the frame when
+    # available (320 wide -> center 160px), else assume 320.
+    screen_w = 320
+    sb = getattr(state, "screen_buffer", None)
+    if sb is not None and getattr(sb, "ndim", 0) == 3:
+        screen_w = int(sb.shape[2] if sb.shape[0] <= 4 else sb.shape[1])
+    elif sb is not None and getattr(sb, "ndim", 0) == 2:
+        screen_w = int(sb.shape[1])
     # Skip non-threats: the player, impact effects, and pickups
     # (labels carry clean categories: Monster vs Weapon/Ammo/...).
     # Off-screen pickups can't be categorized by label, so fall back
@@ -119,13 +138,21 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         dy = float(o.position_y) - py
         vx, vy = float(o.velocity_x), float(o.velocity_y)
         closing = (vx * dx + vy * dy) / dist < -1.0
+        # Screen-x centering error (pixels, + = right of center) from the
+        # label box, so Jev can micro-adjust. Off-screen: None.
+        x_err = None
+        lb = labels_by_id.get(o.id)
+        if o.id in visible_ids and lb is not None:
+            x_err = round(float(lb.x) + float(lb.width) / 2 - screen_w / 2)
         enemies.append({
+            "id": o.id,
             "type": o.name,
             "bearing": round(bearing, 1),
             "dist": round(dist),
             "range": _bucket(dist),
             "visible": o.id in visible_ids,
             "closing": closing,
+            "x_err": x_err,
         })
 
     # Most threatening first: visible, then closest. Cap for token budget.
@@ -168,7 +195,12 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         "pickups": nearest,
         "sectors": sectors,
         "center_visible": center_visible,
+        "focus": focus,  # engagement lock (None when no target held)
     }
+    if hits_taken is not None:
+        snap["player"]["hits_taken"] = int(hits_taken)
+    if damage is not None:
+        snap["player"]["damage"] = int(damage)
     if last is not None:
         snap["last"] = last
 
