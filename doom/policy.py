@@ -296,17 +296,32 @@ def to_action(answers: dict, snapshot: dict,
         return _corridor_action(answers, snapshot)
     ammo = snapshot["player"]["ammo"]
     aim = answers["aim"]
-    fire_p = answers["fire"]["noul"]
-    threshold = C.FIRE_THRESHOLD.get(scenario, 0.65)
-
-    attack = (
-        ammo > 0
-        and fire_p >= threshold
-        and snapshot["center_visible"]
-    )
+    fire_ans = answers.get("fire", {})
+    # Issue-16: fire is a relative Choice {shoot, hold} carrying the
+    # numeric rule (|bearing| <= 10 AND visible -> shoot). Fire iff the
+    # model picks shoot: no Noul threshold, no center_visible backstop
+    # (trusting the model is the experiment). Ammo gate stays.
+    # Legacy Noul shape ({"noul": p}) still fires via the old threshold
+    # so mid-rollout mixed answers fail safe instead of going silent.
+    if "choice" in fire_ans:
+        fire_choice = fire_ans["choice"]
+        fire_conf = fire_ans.get("confidence")
+        attack = ammo > 0 and fire_choice == "shoot"
+        reason = (f"fire choice={fire_choice}"
+                  + (f" conf={fire_conf:.2f}"
+                     if isinstance(fire_conf, (int, float)) else ""))
+    else:
+        fire_p = fire_ans.get("noul", 0.0)
+        threshold = C.FIRE_THRESHOLD.get(scenario, 0.65)
+        attack = (
+            ammo > 0
+            and fire_p >= threshold
+            and snapshot["center_visible"]
+        )
+        reason = f"fire p={fire_p:.2f} (legacy noul)"
     if attack:
         _sense(snapshot)  # keep threat memory fresh even while firing
-        return [0, 0, 1], C.FIRE_TICS, f"fire p={fire_p:.2f}"
+        return [0, 0, 1], C.FIRE_TICS, reason
 
     # Issue-3: hit from off-screen with no strafe buttons here -> turn to
     # face the most recently visible threat sector.
