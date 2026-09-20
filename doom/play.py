@@ -37,6 +37,35 @@ _EXT_PACE_S = 2 / 35
 SEED_SUITE = [1, 2, 3, 4, 5]
 
 
+def _fire_log_fields(answers: dict) -> dict:
+    """Defensive fire logging for both answer shapes (issue #16).
+
+    New Choice shape {"choice": "shoot"/"hold", "confidence": ...} ->
+    {"fire": 1.0/0.0, "fire_choice": ..., "fire_conf": ...}.
+    Old Noul shape {"noul": p} -> {"fire": p} (no fire_choice key),
+    so old and new logs stay readable by the same tools.
+    """
+    fire_ans = answers.get("fire", {})
+    if "choice" in fire_ans:
+        choice = fire_ans.get("choice")
+        conf = fire_ans.get("confidence")
+        return {
+            "fire": 1.0 if choice == "shoot" else 0.0,
+            "fire_choice": choice,
+            "fire_conf": (round(conf, 3)
+                          if isinstance(conf, (int, float)) else conf),
+        }
+    return {"fire": round(fire_ans.get("noul", 0.0), 3)}
+
+
+def _fire_str(answers: dict) -> str:
+    """One-line fire display handling both Choice and legacy Noul answers."""
+    fire_ans = answers.get("fire", {})
+    if "choice" in fire_ans:
+        return f"fire={fire_ans.get('choice')}"
+    return f"fire={fire_ans.get('noul', 0.0):.2f}"
+
+
 def _step(game, action: list, tics: int, frames: list | None,
           pace: bool = False) -> None:
     """Apply a hold in 2-tic chunks, capturing frames along the way.
@@ -316,7 +345,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                 log({
                     "aim": answers["aim"]["choice"],
                     "aim_conf": round(answers["aim"]["confidence"], 3),
-                    "fire": round(answers["fire"]["noul"], 3),
+                    **_fire_log_fields(answers),
                     "danger": round(answers["danger"]["score"], 2),
                     "action": action, "reason": reason, "ms": round(ms),
                     "in_tok": usage.get("input_tokens", 0),
@@ -337,7 +366,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                           f"[{reason}, {ms:.0f}ms]", flush=True)
                 else:
                     print(f"  d{decisions}: aim={answers['aim']['choice']} "
-                          f"fire={answers['fire']['noul']:.2f} "
+                          f"{_fire_str(answers)} "
                           f"danger={answers['danger']['score']:.2f} "
                           f"hp={snapshot['player']['health']:.0f} "
                           f"ammo={snapshot['player']['ammo']:.0f} "

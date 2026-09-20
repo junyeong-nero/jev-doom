@@ -25,6 +25,26 @@ def _seed_of(path: str, summary: dict) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _fire_summary(rows: list) -> str:
+    """One-line fire stat handling both log shapes (issue #16).
+
+    New logs carry fire_choice ("shoot"/"hold") -> shoot rate.
+    Old logs carry only numeric fire (Noul p, or 1.0/0.0 heuristic)
+    -> mean judgment. Missing fire keys -> "-". Never raises.
+    """
+    try:
+        if any(isinstance(r.get("fire_choice"), str) for r in rows):
+            n = sum(1 for r in rows if r.get("fire_choice") == "shoot")
+            return f"shoot {n}/{len(rows)}={n / len(rows):.0%}"
+        fires = [r["fire"] for r in rows
+                 if isinstance(r.get("fire"), (int, float))]
+        if fires:
+            return f"fire~{sum(fires) / len(fires):.2f}"
+    except Exception:
+        pass
+    return "-"
+
+
 def load_bot(path: str, scenario: str) -> dict:
     # Prefer post-episode summary (log rows are pre-action snapshots).
     sumpath = path.replace(".jsonl", ".summary.json")
@@ -38,6 +58,7 @@ def load_bot(path: str, scenario: str) -> dict:
         return {"who": "jev", "kills": kills, "bullets": int(max(bullets, 0)),
                 "decisions": s.get("decisions", len(rows)), "avg_ms": ms,
                 "reward": s.get("reward"), "seed": _seed_of(path, s),
+                "fire": _fire_summary(rows),
                 "path": Path(path).name}
     except FileNotFoundError:
         pass
@@ -50,6 +71,7 @@ def load_bot(path: str, scenario: str) -> dict:
             "decisions": len(rows),
             "avg_ms": round(sum(r.get("ms", 0) for r in rows) / len(rows)),
             "reward": None, "seed": _seed_of(path, {}),
+            "fire": _fire_summary(rows),
             "path": Path(path).name + " (~kills, 구 로그)"}
 
 
@@ -97,6 +119,9 @@ def main() -> None:
             extra = (f"{e.get('decisions', '')} decisions"
                      if e["who"] in ("jev", "heuristic")
                      else f"{e.get('tics', '')} tics survived")
+            fire = e.get("fire")
+            if fire:
+                extra += f", {fire}"
             print(f"  {e['who']:<9} {e['kills']:>5} {e['bullets']:>7} "
                   f"{acc:>6}  {extra} ({e['path']})")
         for who in ("jev", "heuristic"):

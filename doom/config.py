@@ -22,14 +22,13 @@ API_URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 
 FIRE_INSTRUCTIONS = (
-    "Should the player shoot RIGHT NOW? "
+    "Decide whether to shoot RIGHT NOW. "
     "Apply this exact rule, no judgment calls: "
     "if any enemy in enemies has |bearing| <= 10 AND visible = true, "
-    "answer YES with probability 0.85 or higher. "
-    "Otherwise answer NO with probability 0.15 or lower. "
-    "Do not hedge in the middle. "
+    "pick shoot. Otherwise pick hold. "
     "Ammo remaining: {ammo} bullets; every enemy needs multiple hits, "
-    "so keep firing on a centered visible enemy across decisions."
+    "so keep picking shoot on a centered visible enemy across decisions "
+    "(sustained fire — do not conserve ammo when the rule fires)."
 )
 
 FOCUS_INSTRUCTIONS = (
@@ -62,8 +61,14 @@ QUESTIONS = {
         },
     },
     "fire": {
-        "type": "noul",
+        "type": "choice",
         "instructions": FIRE_INSTRUCTIONS,  # formatted with ammo at call time
+        "criteria": {
+            "shoot": "An enemy is centered (|bearing| <= 10) AND visible: "
+                     "fire now",
+            "hold": "No centered visible enemy: hold fire (aim first, "
+                    "save ammo)",
+        },
     },
     "danger": {
         "type": "score",
@@ -77,7 +82,9 @@ QUESTIONS = {
 }
 
 # Decision thresholds / timing
-FIRE_THRESHOLD = {"defend": 0.4, "basic": 0.5, "simple": 0.5}  # defend loosened: explicit numeric rule fires more (cf. jev-plays-doom rule criteria)
+# FIRE_THRESHOLD is legacy: defend-family fire is now a relative
+# Choice (shoot/hold), so the Noul threshold no longer gates firing.
+FIRE_THRESHOLD = {"defend": 0.4, "basic": 0.5, "simple": 0.5}
 TURN_TICS = 4            # fallback turn hold: their 4-tic cadence
 TURN_DEG_PER_TIC = 0.44  # measured turn rate: proportional holds = round(|bearing| / 0.44)
 TURN_TICS_MIN = 2        # smallest turn: micro-adjusts land at 2-4 tics
