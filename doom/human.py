@@ -1,14 +1,13 @@
-"""Human keyboard baseline: play the same scenarios as Jev, compare records.
+"""Human keyboard baseline: play the same map as Jev, compare records.
 
 Renders VizDoom frames into a pygame window, so one window handles
 both view and input (VizDoom's own window can't capture keys).
 
 Usage:
-    uv run python -m doom.human --scenario defend
-    uv run python -m doom.human --scenario simple --episodes 2
+    uv run python -m doom.human
+    uv run python -m doom.human --episodes 2
 
-Controls: WASD = move, LEFT/RIGHT = turn, SHIFT = run (SPEED),
-SPACE = fire, ESC = quit (corridor); otherwise arrows + space.
+Controls: arrows + space (LEFT/RIGHT turn, SPACE fire, ESC quit).
 """
 import argparse
 import datetime
@@ -23,23 +22,14 @@ from .doom_env import make_game
 LOG_EVERY_TICS = 7
 
 
-def read_action(keys, scenario: str = "defend") -> list:
-    if scenario == "corridor":
-        # [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK, SELECT_WEAPON3, SPEED]
-        speed = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
-        return [int(bool(keys[pygame.K_w])), int(bool(keys[pygame.K_s])),
-                int(bool(keys[pygame.K_a])), int(bool(keys[pygame.K_d])),
-                int(bool(keys[pygame.K_LEFT])), int(bool(keys[pygame.K_RIGHT])),
-                int(bool(keys[pygame.K_SPACE])), int(bool(keys[pygame.K_q])),
-                int(bool(speed))]
+def read_action(keys) -> list:
     left = keys[pygame.K_LEFT] or keys[pygame.K_a]
     right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
     fire = keys[pygame.K_SPACE]
     return [int(bool(left)), int(bool(right)), int(bool(fire))]
 
 
-def run_human_episode(game, log, scenario: str = "defend",
-                      scale: int = 2) -> dict:
+def run_human_episode(game, log, scale: int = 2) -> dict:
     game.new_episode()
     sw, sh = 320, 240
     screen = pygame.display.set_mode((sw * scale, sh * scale))
@@ -56,7 +46,7 @@ def run_human_episode(game, log, scenario: str = "defend",
         if keys[pygame.K_ESCAPE]:
             return {"quit": True, "tic": tic, "shots": shots}
 
-        action = read_action(keys, scenario)
+        action = read_action(keys)
         state = game.get_state()
         if state is None:
             break
@@ -93,8 +83,7 @@ def run_human_episode(game, log, scenario: str = "defend",
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", default="defend",
-                    choices=["defend", "basic", "simple", "corridor"])
+    ap.add_argument("--scenario", default="defend", choices=["defend"])
     ap.add_argument("--episodes", type=int, default=1)
     ap.add_argument("--timeout", type=int, default=2100)
     args = ap.parse_args()
@@ -108,13 +97,12 @@ def main() -> None:
     try:
         for ep in range(args.episodes):
             path = run_dir / f"{ts}_human_{args.scenario}_ep{ep}.jsonl"
-            print(f"episode {ep}: play! (corridor: WASD + arrows + space, "
-                  f"Q = shotgun, SHIFT = run | others: arrows + space, "
-                  f"ESC quits)", flush=True)
+            print("episode {ep}: play! (arrows + space, ESC quits)".format(ep=ep),
+                  flush=True)
             with open(path, "w") as f:
                 def log(obj, f=f):
                     f.write(json.dumps(obj) + "\n")
-                s = run_human_episode(game, log, args.scenario)
+                s = run_human_episode(game, log)
             s.update({"scenario": args.scenario, "path": str(path)})
             print(f"episode {ep} done: {s}", flush=True)
             with open(run_dir / f"{ts}_human_{args.scenario}_ep{ep}.summary.json",

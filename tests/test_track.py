@@ -56,16 +56,12 @@ def test_track_falls_back_to_cur_without_target():
 
 
 def test_lead_from_focus_and_cur():
-    assert play._lead(0.0, None, [0, 0, 0], "defend") is None
+    assert play._lead(0.0, None, [0, 0, 0]) is None
     # tracker will turn right toward a +30 focus, capped at 30 degrees
-    assert play._lead(10.4, {"bearing": 30.0}, [0, 0, 0], "defend") == {
+    assert play._lead(10.4, {"bearing": 30.0}, [0, 0, 0]) == {
         "tics": 10, "turn": 1, "cap_deg": 30.0}
-    assert play._lead(10.4, {"bearing": -3.0}, [0, 0, 0], "defend") == {
+    assert play._lead(10.4, {"bearing": -3.0}, [0, 0, 0]) == {
         "tics": 10, "turn": 0, "cap_deg": None}
-    # basic/simple strafe: facing does not change
-    assert play._lead(10.4, {"bearing": 30.0}, [0, 0, 0], "basic")["turn"] == 0
     # no focus: held turn button
-    assert play._lead(6.0, None, [1, 0, 0], "defend")["turn"] == -1
-    assert play._lead(6.0, None, [0, 1, 0], "defend")["turn"] == 1
-    # corridor: held TURN_LEFT/RIGHT at idx 4/5
-    assert play._lead(6.0, None, [0, 0, 0, 0, 0, 1, 0, 0, 0], "corridor")["turn"] == 1
+    assert play._lead(6.0, None, [1, 0, 0])["turn"] == -1
+    assert play._lead(6.0, None, [0, 1, 0])["turn"] == 1

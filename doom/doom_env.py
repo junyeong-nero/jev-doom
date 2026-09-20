@@ -39,41 +39,6 @@ SCENARIOS = {
         "buttons": [vzd.Button.TURN_LEFT, vzd.Button.TURN_RIGHT, vzd.Button.ATTACK],
         "variables": _base_variables(),
     },
-    "basic": {
-        "wad": "basic.wad",
-        "buttons": [vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT, vzd.Button.ATTACK],
-        "variables": _base_variables(),
-    },
-    "simple": {
-        "wad": "simpler_basic.wad",
-        "buttons": [vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT, vzd.Button.ATTACK],
-        "variables": _base_variables(),
-        "skill": 3,
-    },
-    "corridor": {
-        "wad": "deadly_corridor.wad",
-        "buttons": [
-            vzd.Button.MOVE_FORWARD, vzd.Button.MOVE_BACKWARD,
-            vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT,
-            vzd.Button.TURN_LEFT, vzd.Button.TURN_RIGHT,
-            vzd.Button.ATTACK,
-            # Appended at END so ATTACK stays index 6. Slot 3 = shotgun
-            # (slot 2 is the starting pistol); ChaingunGuys/ShotgunGuys
-            # drop their guns on death, so this gets used mid-episode.
-            vzd.Button.SELECT_WEAPON3,
-            vzd.Button.SPEED,  # free run speed, no stamina (issue #5)
-        ],
-        # Weapon vars AFTER the damage counters ([6..9]) so encoder
-        # indexes [4],[5] keep reading HITS_TAKEN/DAMAGECOUNT (issue #3).
-        "variables": _base_variables() + [
-            vzd.GameVariable.SELECTED_WEAPON,
-            vzd.GameVariable.SELECTED_WEAPON_AMMO,
-            vzd.GameVariable.WEAPON3,  # shotgun owned (0/1)
-            vzd.GameVariable.AMMO1,  # shotgun shells
-        ],
-        "skill": 5,  # as designed: fast monsters, death_penalty 100
-        "depth": True,  # depth buffer for cover features
-    },
 }
 
 

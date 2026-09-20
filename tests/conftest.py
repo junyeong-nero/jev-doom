@@ -3,13 +3,11 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-# Corridor game vars: [HEALTH, AMMO2, KILLCOUNT, ANGLE, HITS_TAKEN,
-# DAMAGECOUNT, SELECTED_WEAPON, SELECTED_WEAPON_AMMO, WEAPON3, AMMO1]
-VARS = [100.0, 52.0, 0.0, 0.0, 0.0, 0.0, 2.0, 52.0, 0.0, 0.0]
-
-# Defend-family game vars: [HEALTH, AMMO2, KILLCOUNT, ANGLE, HITS_TAKEN,
+# Defend game vars: [HEALTH, AMMO2, KILLCOUNT, ANGLE, HITS_TAKEN,
 # DAMAGECOUNT] (26 bullets, the loadout the 10.20±2.04 suite used)
-VARS_DEFEND = [100.0, 26.0, 0.0, 0.0, 0.0, 0.0]
+VARS = [100.0, 26.0, 0.0, 0.0, 0.0, 0.0]
+
+VARS_DEFEND = list(VARS)
 
 
 def obj(id, name, x, y, vx=0.0, vy=0.0):
@@ -50,7 +48,7 @@ class FakeGame:
                 and len(self.calls) >= self.finished_after)
 
     def get_available_buttons(self):
-        return [None] * 9
+        return [None] * 3
 
 
 @pytest.fixture

@@ -5,12 +5,10 @@ decide() runs in a background thread, the current action keeps being
 applied; the fresh action swaps in on arrival.
 
 Usage:
-    uv run python -m doom.play --scenario defend --episodes 2
-    uv run python -m doom.play --scenario defend --visible   # watch it play
-    uv run python -m doom.play --scenario defend --suite     # fixed seed suite (1..5)
-    uv run python -m doom.play --scenario defend --seed 1    # single seeded run
-    uv run python -m doom.play --brain jev|heuristic         # API brain vs no-API baseline
-    uv run python -m doom.play --scenario corridor --brain heuristic  # geometry bot
+    uv run python -m doom.play --brain jev --suite
+    uv run python -m doom.play --brain jev --seed 1 --visible  # watch it play
+    uv run python -m doom.play --brain heuristic --suite       # no-API baseline
+    uv run python -m doom.play --brain jev --record            # also saves frames
 """
 import argparse
 import datetime
@@ -110,8 +108,8 @@ def _extend(game, action: list, frames: list | None, done,
 
 def _track(game, cur: list, frames: list | None, done, target_id,
            fire_ok: bool) -> int:
-    """Latency-gap tracker (3-button layouts): keep Jev's picked target
-    centered at 4-tic cadence while the next answer is in flight.
+    """Latency-gap tracker: keep Jev's picked target centered at 4-tic
+    cadence while the next answer is in flight.
 
     Jev decides WHAT (target + shoot/hold); this only resolves geometry
     per tic, like ultrafast re-reading element geometry before a click:
@@ -149,69 +147,34 @@ def _track(game, cur: list, frames: list | None, done, target_id,
     return stepped
 
 
-def _lead(gap_tics: float, focus: dict | None, cur: list,
-          scenario: str) -> dict | None:
+def _lead(gap_tics: float, focus: dict | None, cur: list) -> dict | None:
     """Latency lead for encode(): what the gap will do to the facing.
 
-    Tracking scenarios steer toward focus (turn = its side, capped at its
-    bearing so the prediction never overshoots); basic/simple strafe, so
-    facing is unchanged. Otherwise the held turn button decides.
+    The tracker steers toward focus (turn = its side, capped at its
+    bearing so the prediction never overshoots). Without focus the held
+    turn button decides.
     """
     tics = round(gap_tics)
     if tics <= 0:
         return None
-    if scenario in C.TRACK_SCENARIOS and focus is not None:
+    if focus is not None:
         b = float(focus["bearing"])
-        if scenario != "defend" or abs(b) <= C.CENTER_DEGREES:
+        if abs(b) <= C.CENTER_DEGREES:
             return {"tics": tics, "turn": 0, "cap_deg": None}
         return {"tics": tics, "turn": 1 if b > 0 else -1, "cap_deg": abs(b)}
-    if scenario == "corridor":
-        turn = 1 if cur[5] else -1 if cur[4] else 0
-    else:
-        turn = 1 if cur[1] else -1 if cur[0] else 0
+    turn = 1 if cur[1] else -1 if cur[0] else 0
     return {"tics": tics, "turn": turn, "cap_deg": None}
 
 
-#: Heuristic baseline (mirrors tirukovelamanoj/jev-plays-doom rule brain):
-#: nearest-by-distance target, fire within ±8°, else turn/strafe toward it.
-#: Ours: negative bearing = LEFT. 3-button scenarios only (no API calls).
-HEURISTIC_FIRE_DEG = 8
-HEURISTIC_TURN_TICS = 4  # their cadence: fast re-aim, no settling
-
-
-def heuristic_action(snapshot: dict, scenario: str) -> tuple[list, int, str]:
-    enemies = snapshot.get("enemies", [])
-    vis = [e for e in enemies if e.get("visible")]
-    pool = vis or enemies  # aim at off-screen bearings too (they do)
-    if not pool:
-        return [0, 0, 0], C.TURN_TICS, "heuristic: no target"
-    tgt = min(pool, key=lambda e: e["dist"])  # nearest by DISTANCE (anti-spin)
-    b = tgt["bearing"]
-    if abs(b) <= HEURISTIC_FIRE_DEG:
-        return [0, 0, 1], C.FIRE_TICS, f"heuristic fire b={b}"
-    vec = [1, 0, 0] if b < 0 else [0, 1, 0]  # left / right (or strafe)
-    return vec, HEURISTIC_TURN_TICS, f"heuristic turn b={b}"
-
-
-def _aim_of_corridor(action: list, fired: bool) -> str:
-    if fired:
-        return "center"
-    if action[4] or action[2]:
-        return "left"
-    if action[5] or action[3]:
-        return "right"
-    return "center"
-
-
-def run_corridor_heuristic_episode(game, log, frames: list | None = None,
-                                   seed: int | None = None) -> dict:
-    """Corridor geometry baseline (9-button, no API). See doom/heuristic."""
+def run_heuristic_episode(game, log, frames: list | None = None,
+                          seed: int | None = None) -> dict:
+    """No-API baseline with the same log schema as the Jev loop."""
     if seed is not None:
         game.set_seed(seed)
     game.new_episode()
     hev.reset_episode()
     decisions, shots = 0, 0
-    atk_idx = C.ATTACK_IDX["corridor"]
+    atk_idx = C.ATTACK_IDX
     while not game.is_episode_finished():
         state = game.get_state()
         if state is None:
@@ -228,64 +191,12 @@ def run_corridor_heuristic_episode(game, log, frames: list | None = None,
             _step(game, action, tics, frames)
         decisions += 1
         fired = bool(action[atk_idx])
-        log({
-            "aim": _aim_of_corridor(action, fired), "aim_conf": 1.0,
-            "fire": 1.0 if fired else 0.0,
-            "danger": hev.danger_of(snapshot),
-            "action": action, "reason": reason, "ms": 0,
-            "in_tok": 0, "out_tok": 0,
-            "hp": snapshot["player"]["health"],
-            "ammo": snapshot["player"]["ammo"],
-            "kills": snapshot["player"]["kills"],
-            "focus": None,
-        })
-        if decisions == 1 or decisions % 50 == 0:
-            print(f"  d{decisions}: {reason} "
-                  f"hp={snapshot['player']['health']:.0f} "
-                  f"ammo={snapshot['player']['ammo']:.0f} "
-                  f"kills={snapshot['player']['kills']}", flush=True)
-    total = game.get_total_reward()
-    return {"decisions": decisions, "shots": shots, "avg_ms": 0,
-            "reward": total}
-
-
-def run_heuristic_episode(game, log, scenario: str = "defend",
-                          frames: list | None = None,
-                          seed: int | None = None) -> dict:
-    """No-API baseline with the same log schema as the Jev loop."""
-    if scenario == "corridor":
-        return run_corridor_heuristic_episode(game, log, frames, seed)
-    if seed is not None:
-        game.set_seed(seed)
-    game.new_episode()
-    reset_episode()
-    decisions, shots = 0, 0
-    atk_idx = C.ATTACK_IDX.get(scenario, 2)
-    while not game.is_episode_finished():
-        state = game.get_state()
-        if state is None:
-            break
-        if frames is not None and state.screen_buffer is not None:
-            frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
-        snapshot = encode(state, list(state.game_variables))
-        action, tics, reason = heuristic_action(snapshot, scenario)
-        if action[atk_idx]:
-            shots += 1
-            _step(game, action, tics, frames)
-            _step(game, [0] * len(action), C.RELEASE_TICS, frames)
-        else:
-            _step(game, action, tics, frames)
-        decisions += 1
-        fired = bool(action[atk_idx])
         aim = ("center" if fired else
                "left" if action[0] else "right" if action[1] else "center")
-        vis_close = any(e.get("visible") and e.get("range") == "close"
-                        for e in snapshot.get("enemies", []))
-        vis_any = any(e.get("visible") for e in snapshot.get("enemies", []))
         log({
             "aim": aim, "aim_conf": 1.0,
             "fire": 1.0 if fired else 0.0,
-            "danger": 2.0 if vis_close else 1.0 if vis_any else 0.0,
+            "danger": hev.danger_of(snapshot),
             "action": action, "reason": reason, "ms": 0,
             "in_tok": 0, "out_tok": 0,
             "hp": snapshot["player"]["health"],
@@ -318,7 +229,7 @@ def _public_focus(focus: dict | None) -> dict | None:
 
 def _update_focus(engaged: dict, focus: dict | None, enemies: list,
                   kills_now: int, kills_prev: int | None) -> dict | None:
-    """Engagement table + target-lock update. Scenario-agnostic.
+    """Engagement table + target-lock update.
 
     engaged: object id -> {type, last bearing/dist, engaged decision count}.
     Returns the lock record (with private misses/dist) or None. The lock is
@@ -364,8 +275,8 @@ def _update_focus(engaged: dict, focus: dict | None, enemies: list,
     return focus
 
 
-def run_episode(game, client, log, scenario: str = "defend",
-                frames: list | None = None, seed: int | None = None) -> dict:
+def run_episode(game, client, log, frames: list | None = None,
+                seed: int | None = None) -> dict:
     if seed is not None:
         game.set_seed(seed)
     game.new_episode()
@@ -374,7 +285,7 @@ def run_episode(game, client, log, scenario: str = "defend",
     last_turn = None
     after_turn = False  # previous action was a turn -> observe once
     prev = None  # feedback for the next snapshot
-    atk_idx = C.ATTACK_IDX.get(scenario, 2)
+    atk_idx = C.ATTACK_IDX
     n_btn = len(game.get_available_buttons())
     cur = [0] * n_btn  # last safe action; warn-hold zeros until d1 arrives
     cycle = False  # re-press semi-auto fire while holding an attack action
@@ -384,7 +295,6 @@ def run_episode(game, client, log, scenario: str = "defend",
     recent: deque = deque(maxlen=5)  # history window shown to Jev
     gap_ema = 0.0  # game tics spent per latency gap (EMA, alpha 0.2)
     fire_ok = False  # Jev's last fire answer was shoot -> tracker may fire
-    track = scenario in C.TRACK_SCENARIOS
 
     def fresh():
         """Snapshot the live state (+record frame, +focus lock).
@@ -397,7 +307,7 @@ def run_episode(game, client, log, scenario: str = "defend",
             return None
         if frames is not None and state.screen_buffer is not None:
             frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
-        lead = _lead(gap_ema, focus, cur, scenario)
+        lead = _lead(gap_ema, focus, cur)
         snap = encode(state, list(state.game_variables), last=prev,
                       recent=list(recent), lead=lead)
         focus = _update_focus(engaged, focus, snap["enemies"],
@@ -412,16 +322,12 @@ def run_episode(game, client, log, scenario: str = "defend",
             return {"decisions": 0, "shots": 0, "avg_ms": 0,
                     "reward": game.get_total_reward()}
         pending = snapshot
-        fut = ex.submit(decide, client, snapshot, scenario)
+        fut = ex.submit(decide, client, snapshot, "defend")
         while not game.is_episode_finished():
             if not fut.done():
-                # Slow API -> track the picked target (3-button) or extend
-                # the last safe action (corridor), never block.
-                if track:
-                    gap = _track(game, cur, frames, fut.done,
-                                 (focus or {}).get("id"), fire_ok)
-                else:
-                    gap = _extend(game, cur, frames, fut.done, cycle)
+                # Slow API -> track the picked target, never block.
+                gap = _track(game, cur, frames, fut.done,
+                             (focus or {}).get("id"), fire_ok)
                 gap_ema = gap if gap_ema == 0 else gap_ema + 0.2 * (gap - gap_ema)
                 continue
             try:
@@ -433,12 +339,12 @@ def run_episode(game, client, log, scenario: str = "defend",
                 if snapshot is None:
                     break
                 pending = snapshot
-                fut = ex.submit(decide, client, snapshot, scenario)
+                fut = ex.submit(decide, client, snapshot, "defend")
                 continue
             snapshot = pending
             focus_id = (snapshot.get("focus") or {}).get("id")
             action, tics, reason = to_action(answers, snapshot, last_turn,
-                                            scenario, after_turn=after_turn)
+                                            "defend", after_turn=after_turn)
             tgt = picked_target(answers, snapshot)
             if tgt is not None:
                 # Focus follows Jev's pick: the tracker and the next
@@ -455,8 +361,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                       C.RELEASE_TICS, frames)  # release: re-press per bullet
             else:
                 _step(game, action, tics, frames)
-            cur, cycle = action, (scenario != "corridor" and
-                                  bool(action[atk_idx]))
+            cur, cycle = action, bool(action[atk_idx])
             if action in ([1, 0, 0], [0, 1, 0]):
                 last_turn = action
             after_turn = action in ([1, 0, 0], [0, 1, 0])
@@ -474,67 +379,35 @@ def run_episode(game, client, log, scenario: str = "defend",
             prev_hp, prev_ammo, prev_kills = (snapshot["player"]["health"],
                                              snapshot["player"]["ammo"],
                                              snapshot["player"]["kills"])
-            if scenario == "corridor":
-                picked = answers["action"]["choice"]
-                log({
-                    "pick": picked,
-                    "pick_conf": round(answers["action"]["confidence"], 3),
-                    "target": answers.get("target", {}).get("choice"),
-                    "target_conf": round(answers.get("target", {}).get("confidence", 0.0), 3),
-                    "lead_tics": snapshot.get("lead_tics", 0),
-                    "danger": round(answers["danger"]["score"], 2),
-                    "action": action, "reason": reason, "ms": round(ms),
-                    "in_tok": usage.get("input_tokens", 0),
-                    "out_tok": usage.get("output_tokens", 0),
-                    "hp": snapshot["player"]["health"],
-                    "ammo": snapshot["player"]["ammo"],
-                    "kills": snapshot["player"]["kills"],
-                    "shells": snapshot["player"].get("shells", 0),
-                    "shotgun": snapshot["player"].get("shotgun_owned", False),
-                    "pickups": {k: (v is not None)
-                                for k, v in snapshot.get("pickups", {}).items()},
-                    "focus": focus_id,
-                })
-            else:
-                log({
-                    "target": answers.get("target", {}).get("choice"),
-                    "target_conf": round(answers.get("target", {}).get("confidence", 0.0), 3),
-                    "lead_tics": snapshot.get("lead_tics", 0),
-                    **_fire_log_fields(answers),
-                    "danger": round(answers["danger"]["score"], 2),
-                    "action": action, "reason": reason, "ms": round(ms),
-                    "in_tok": usage.get("input_tokens", 0),
-                    "out_tok": usage.get("output_tokens", 0),
-                    "hp": snapshot["player"]["health"],
-                    "ammo": snapshot["player"]["ammo"],
-                    "kills": snapshot["player"]["kills"],
-                    "focus": focus_id,
-                })
+            log({
+                "target": answers.get("target", {}).get("choice"),
+                "target_conf": round(answers.get("target", {}).get("confidence", 0.0), 3),
+                "lead_tics": snapshot.get("lead_tics", 0),
+                **_fire_log_fields(answers),
+                "danger": round(answers["danger"]["score"], 2),
+                "action": action, "reason": reason, "ms": round(ms),
+                "in_tok": usage.get("input_tokens", 0),
+                "out_tok": usage.get("output_tokens", 0),
+                "hp": snapshot["player"]["health"],
+                "ammo": snapshot["player"]["ammo"],
+                "kills": snapshot["player"]["kills"],
+                "focus": focus_id,
+            })
             if decisions == 1 or decisions % 10 == 0:
-                if scenario == "corridor":
-                    print(f"  d{decisions}: pick={answers['action']['choice']} "
-                          f"target={answers.get('target', {}).get('choice')} "
-                          f"danger={answers['danger']['score']:.2f} "
-                          f"hp={snapshot['player']['health']:.0f} "
-                          f"ammo={snapshot['player']['ammo']:.0f} "
-                          f"kills={snapshot['player']['kills']} "
-                          f"focus={focus_id} "
-                          f"[{reason}, {ms:.0f}ms]", flush=True)
-                else:
-                    print(f"  d{decisions}: target={answers.get('target', {}).get('choice')} "
-                          f"{_fire_str(answers)} "
-                          f"danger={answers['danger']['score']:.2f} "
-                          f"hp={snapshot['player']['health']:.0f} "
-                          f"ammo={snapshot['player']['ammo']:.0f} "
-                          f"kills={snapshot['player']['kills']} "
-                          f"focus={focus_id} "
-                          f"[{reason}, {ms:.0f}ms]", flush=True)
+                print(f"  d{decisions}: target={answers.get('target', {}).get('choice')} "
+                      f"{_fire_str(answers)} "
+                      f"danger={answers['danger']['score']:.2f} "
+                      f"hp={snapshot['player']['health']:.0f} "
+                      f"ammo={snapshot['player']['ammo']:.0f} "
+                      f"kills={snapshot['player']['kills']} "
+                      f"focus={focus_id} "
+                      f"[{reason}, {ms:.0f}ms]", flush=True)
             # Pipeline the next decision: it runs while cur is held above.
             snapshot = fresh()
             if snapshot is None:
                 break
             pending = snapshot
-            fut = ex.submit(decide, client, snapshot, scenario)
+            fut = ex.submit(decide, client, snapshot, "defend")
     total = game.get_total_reward()
     return {
         "decisions": decisions,
@@ -546,8 +419,7 @@ def run_episode(game, client, log, scenario: str = "defend",
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", default="defend",
-                    choices=["defend", "basic", "simple", "corridor"])
+    ap.add_argument("--scenario", default="defend", choices=["defend"])
     ap.add_argument("--episodes", type=int, default=1)
     ap.add_argument("--visible", action="store_true")
     ap.add_argument("--timeout", type=int, default=2100)
@@ -561,8 +433,7 @@ def main() -> None:
                          "(overrides --episodes/--seed)")
     ap.add_argument("--brain", choices=["jev", "heuristic"], default="jev",
                     help="jev: TypeSafe API policy (MODEL=%s); heuristic: no-API "
-                         "geometry baseline (3-button on defend/basic/simple, "
-                         "9-button corridor bot)" % C.MODEL)
+                         "geometry baseline" % C.MODEL)
     args = ap.parse_args()
 
     if args.brain == "jev" and not C.API_KEY:
@@ -593,11 +464,9 @@ def main() -> None:
                     def log(obj, f=f):
                         f.write(json.dumps(obj) + "\n")
                     if args.brain == "heuristic":
-                        s = run_heuristic_episode(game, log, args.scenario,
-                                                  frames, seed=seed)
+                        s = run_heuristic_episode(game, log, frames, seed=seed)
                     else:
-                        s = run_episode(game, client, log, args.scenario,
-                                        frames, seed=seed)
+                        s = run_episode(game, client, log, frames, seed=seed)
                 if frames:
                     import numpy as np
                     fpath = (run_dir /
@@ -606,7 +475,7 @@ def main() -> None:
                     print(f"saved {len(frames)} frames -> {fpath}", flush=True)
                 import vizdoom as vzd
                 s.update({
-                    # post-episode ground truth (log lines are pre-action snapshots)
+                    # post-episode ground truth (log rows are pre-action snapshots)
                     "hp": float(game.get_game_variable(vzd.GameVariable.HEALTH)),
                     "ammo": float(game.get_game_variable(vzd.GameVariable.AMMO2)),
                     "kills": int(game.get_game_variable(vzd.GameVariable.KILLCOUNT)),

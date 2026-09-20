@@ -6,31 +6,9 @@ in code (bearings in degrees, right-positive).
 """
 import math
 
-import numpy as np
-
 from . import config as C
 
 MAX_ENEMIES = 8
-
-# Pickup classification. Label categories first (case-insensitive);
-# object-name fallback for off-screen items (no label attached).
-# deadly_corridor has one static pickup (armor bonus at the far end);
-# shotguns/chainguns/clips appear mid-episode as monster drops.
-PICKUP_CATEGORIES = {"weapon": "weapon", "ammo": "ammo",
-                     "health": "health", "armor": "armor"}
-
-PICKUP_NAMES = {
-    "shotgun": "weapon", "supershotgun": "weapon", "chaingun": "weapon",
-    "rocketlauncher": "weapon", "plasmarifle": "weapon", "bfg9000": "weapon",
-    "chainsaw": "weapon",
-    "clip": "ammo", "clipbox": "ammo", "shell": "ammo", "shellbox": "ammo",
-    "rocketammo": "ammo", "rocketbox": "ammo", "cell": "ammo",
-    "cellpack": "ammo",
-    "medikit": "health", "stimpack": "health", "healthbonus": "health",
-    "greenarmor": "armor", "bluearmor": "armor", "armorbonus": "armor",
-}
-
-PICKUP_KINDS = ("health", "ammo", "weapon", "armor")
 
 
 def _norm180(deg: float) -> float:
@@ -93,13 +71,6 @@ def _lead_angle(angle: float, lead: dict | None) -> float:
     return angle - delta * (1 if lead["turn"] > 0 else -1)
 
 
-def _pickup_kind(o, categories: dict) -> str | None:
-    cat = (categories.get(o.id) or "").strip().lower()
-    if cat in PICKUP_CATEGORIES:
-        return PICKUP_CATEGORIES[cat]
-    return PICKUP_NAMES.get(o.name.lower())
-
-
 def _bucket(dist: float) -> str:
     if dist < C.CLOSE_DIST:
         return "close"
@@ -123,9 +94,8 @@ def side_of(bearing: float) -> str:
 def encode(state, game_vars, last: dict | None = None,
            focus: dict | None = None, recent: list | None = None,
            lead: dict | None = None) -> dict:
-    """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?,
-    hits_taken?, damage?, selected_weapon?, selected_weapon_ammo?,
-    shotgun_owned?, shells?].
+    """state: vizdoom GameState, game_vars: [health, ammo, kills, angle,
+    hits_taken?, damage?].
 
     last: feedback from the previous decision
     {"action": str, "hp_change": float, "ammo_used": float, "kills_change": int}
@@ -146,24 +116,15 @@ def encode(state, game_vars, last: dict | None = None,
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
     lead_tics = float(lead["tics"]) if lead else 0.0
     angle = _lead_angle(angle, lead)
-    # Issue-3: appended by doom_env (HITS_TAKEN, DAMAGECOUNT). Length-guarded
+    # Appended by doom_env (HITS_TAKEN, DAMAGECOUNT). Length-guarded
     # so older recordings / builds without them still decode.
     hits_taken = float(game_vars[4]) if len(game_vars) > 4 else None
     damage = float(game_vars[5]) if len(game_vars) > 5 else None
-    # Issue-4: corridor-only weapon vars, AFTER the damage counters ([6..9]);
-    # -1/0 defaults on scenarios that don't expose them.
-    selected = int(game_vars[6]) if len(game_vars) > 6 else -1
-    selected_ammo = int(game_vars[7]) if len(game_vars) > 7 else -1
-    shotgun_owned = bool(game_vars[8]) if len(game_vars) > 8 else False
-    shells = int(game_vars[9]) if len(game_vars) > 9 else 0
 
     px, py = _player(state)
 
     enemies = []
-    pickups: dict[str, list] = {k: [] for k in PICKUP_KINDS}
     visible_ids = {label.object_id for label in (state.labels or [])}
-    categories = {label.object_id: getattr(label, "object_category", "")
-                  for label in (state.labels or [])}
     labels_by_id = {label.object_id: label for label in (state.labels or [])}
     # Screen width for the label x-error: derive from the frame when
     # available (640 wide -> center 320px), else assume 640.
@@ -173,25 +134,12 @@ def encode(state, game_vars, last: dict | None = None,
         screen_w = int(sb.shape[2] if sb.shape[0] <= 4 else sb.shape[1])
     elif sb is not None and getattr(sb, "ndim", 0) == 2:
         screen_w = int(sb.shape[1])
-    # Skip non-threats: the player, impact effects, and pickups
-    # (labels carry clean categories: Monster vs Weapon/Ammo/...).
-    # Off-screen pickups can't be categorized by label, so fall back
-    # to object names; either way they leave the enemy list.
+    # Skip non-threats: the player and impact effects.
     IGNORE = {"DoomPlayer", "BulletPuff", "Blood"}
     for o in state.objects or []:
         if o.name in IGNORE:
             continue
-        kind = _pickup_kind(o, categories)
         bearing, dist = _rel(px, py, angle, o, lead_tics)
-        if kind is not None:
-            pickups[kind].append({
-                "kind": kind,
-                "name": o.name,
-                "bearing": round(bearing, 1),
-                "dist": round(dist),
-                "visible": o.id in visible_ids,
-            })
-            continue
         # Radial velocity: negative = closing in on the player.
         dx = float(o.position_x) + float(o.velocity_x) * lead_tics - px
         dy = float(o.position_y) + float(o.velocity_y) * lead_tics - py
@@ -241,20 +189,10 @@ def encode(state, game_vars, last: dict | None = None,
         e["visible"] and abs(e["bearing"]) <= C.CENTER_DEGREES for e in enemies
     )
 
-    # Nearest pickup per kind (None when absent): {kind, bearing, dist, visible}.
-    nearest = {}
-    for kind, items in pickups.items():
-        items.sort(key=lambda p: (not p["visible"], p["dist"]))
-        nearest[kind] = items[0] if items else None
-
     snap = {
         "player": {"health": health, "ammo": int(ammo), "kills": int(kills),
-                    "angle": round(angle, 1), "pos": [round(px), round(py)],
-                    "selected_weapon": selected,
-                    "selected_weapon_ammo": selected_ammo,
-                    "shotgun_owned": shotgun_owned, "shells": shells},
+                    "angle": round(angle, 1), "pos": [round(px), round(py)]},
         "enemies": enemies,
-        "pickups": nearest,
         "sectors": sectors,
         "center_visible": center_visible,
         "focus": focus,  # engagement lock (None when no target held)
@@ -270,16 +208,4 @@ def encode(state, game_vars, last: dict | None = None,
     if lead:
         snap["lead_tics"] = int(lead["tics"])
 
-    # Corridor maps: per-sector wall proximity from the depth buffer.
-    # "wall" = blocked that way, "open" = free path. Robust median
-    # (enemies are a minority of pixels).
-    if getattr(state, "depth_buffer", None) is not None:
-        d = state.depth_buffer
-        w = d.shape[1]
-        thirds = {"left": d[:, :w // 3], "center": d[:, w // 3:2 * w // 3],
-                  "right": d[:, 2 * w // 3:]}
-        snap["path"] = {
-            name: ("open" if float(np.median(slab)) >= 20.0 else "wall")
-            for name, slab in thirds.items()
-        }
     return snap

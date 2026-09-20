@@ -13,7 +13,7 @@ import re
 import statistics
 from pathlib import Path
 
-START_AMMO = {"defend": 26, "basic": 50, "simple": 50, "corridor": 52}
+START_AMMO = {"defend": 26}
 
 SEED_RE = re.compile(r"_seed(\d+)")
 
@@ -94,7 +94,7 @@ def main() -> None:
     ap.add_argument("--scenario", default=None)
     args = ap.parse_args()
 
-    for scenario in (["defend", "basic", "simple", "corridor"]
+    for scenario in (["defend"]
                      if args.scenario is None else [args.scenario]):
         print(f"=== {scenario} ===")
         entries = []

@@ -50,15 +50,6 @@ def test_build_questions_defend_shapes():
     assert q["danger"]["type"] == "score"
 
 
-def test_build_questions_corridor_keeps_action_adds_target():
-    snap = snap_two()
-    q = policy.build_questions(snap, "corridor")
-    assert set(q) == {"action", "target", "danger"}
-    assert "advance" in q["action"]["criteria"]
-    assert "TARGET LOCK" in q["action"]["instructions"]["goal"]
-    assert list(q["target"]["criteria"]) == ["1", "2", "none"]
-
-
 def test_target_ids_empty_list_is_none_only():
     snap = encode(state([PLAYER]), VARS_DEFEND)
     assert policy.target_ids(snap) == ["none"]
@@ -120,18 +111,3 @@ def test_to_action_none_or_invalid_scans():
     vec2, _, r2 = policy.to_action(answers("bogus"), snap, scenario="defend")
     assert vec1 in ([1, 0, 0], [0, 1, 0]) and "scan" in r1
     assert vec2 in ([1, 0, 0], [0, 1, 0]) and vec2 != vec1 and "scan" in r2
-
-
-def test_corridor_turn_uses_target_bearing_when_same_side():
-    snap = snap_two()
-    snap["path"] = {"left": "wall", "center": "open", "right": "wall"}
-    policy._corridor_decisions = policy.OPENING_SPRINT  # skip the sprint
-    ans = {"action": {"choice": "turn_right", "confidence": 0.9},
-           "target": {"choice": "1", "confidence": 0.9},  # +26.6 right
-           "danger": {"score": 0.2}}
-    vec, tics, reason = policy.to_action(ans, snap, scenario="corridor")
-    assert vec[5] == 1 and tics == 4 and "b=26.6" in reason
-    policy._corridor_decisions = policy.OPENING_SPRINT
-    ans["target"]["choice"] = "2"  # far_left: disagrees with turn_right
-    vec, tics, reason = policy.to_action(ans, snap, scenario="corridor")
-    assert vec[5] == 1 and tics == policy.C.TURN_TICS and "b=" not in reason
