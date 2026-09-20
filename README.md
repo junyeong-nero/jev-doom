@@ -26,33 +26,47 @@ uv run python -m doom.compare                  # scoreboard
 
 ## What Jev actually sees (context injection)
 
-No pixels, no history — one JSON snapshot per decision. Example (real,
-deadly_corridor spawn):
+No pixels — one JSON snapshot per decision, predicted forward to the
+moment the answer will land. Example (real, deadly_corridor spawn):
 
 ```json
 {
   "player": {"health": 100, "ammo": 52, "kills": 0, "angle": 0, "pos": [0, 0]},
   "enemies": [
-    {"type": "ShotgunGuy", "bearing": -21.8, "dist": 172,
+    {"idx": 1, "type": "ShotgunGuy", "bearing": -21.8, "side": "left", "dist": 172,
      "range": "close", "visible": true, "closing": false},
-    {"type": "Zombieman", "bearing": 21.8, "dist": 172,
+    {"idx": 2, "type": "Zombieman", "bearing": 21.8, "side": "right", "dist": 172,
      "range": "close", "visible": true, "closing": false},
-    {"type": "Zombieman", "bearing": -6.0, "dist": 611,
+    {"idx": 3, "type": "Zombieman", "bearing": -6.0, "side": "centered", "dist": 611,
      "range": "mid", "visible": false, "closing": false}
   ],
   "sectors": {"left": {"enemies": 1, "nearest": "close", "visible": 1}, "...": {}},
   "center_visible": false,
+  "focus": {"id": 12, "type": "ShotgunGuy", "bearing": -21.8, "engaged": 2},
   "path": {"left": "wall", "center": "open", "right": "wall"},
   "last": {"action": "strafe left + fire",
-           "hp_change": -18, "ammo_used": 2, "kills_change": 0}
+           "hp_change": -18, "ammo_used": 2, "kills_change": 0},
+  "recent": ["... last 5 of the above, oldest first ..."],
+  "lead_tics": 11
 }
 ```
 
-Field guide (also spelled out in the prompt itself): bearings in degrees,
-negative = LEFT, positive = RIGHT; `closing` from radial velocity;
-`path` from the depth buffer (median per screen third); `last` is
-one-step feedback so the stateless model sees what its previous pick cost.
-`doom/encoder.py` builds this from `objects_info` + labels + depth.
+Field guide (also spelled out in the prompt as a shared `rules` list):
+bearings in degrees, negative = LEFT, positive = RIGHT; `side` is the
+same bearing in words (`far_left/left/centered/right/far_right`) and the
+question criteria use exactly those tokens; `idx` is the key Jev answers
+with in the `target` question (criteria are built per snapshot from this
+list — an indexed action space, after
+[jev-ultrafast](https://github.com/junyeong-nero/jev-ultrafast));
+`closing` from radial velocity; `path` from the depth buffer (median per
+screen third); `last`/`recent` are feedback so the stateless model sees
+what its previous picks cost; `lead_tics` is the latency lead (after
+[jev-flappy-bird](https://github.com/hosseintoussi/jev-flappy-bird)):
+enemies are dead-reckoned along their velocity and the player's facing
+along the turn in progress, by the EMA of game tics the last API round
+trip cost, so Jev decides on the state it will actually act in.
+`doom/encoder.py` builds this from `objects_info` + labels + depth;
+`policy.build_questions()` builds the questions.
 Prompt (`doom/config.py`) adds the Doom field manual: pistol ballistics,
 ammo economy, monster guide (Zombieman < ShotgunGuy < ChaingunGuy),
 and tactics (3+ visible = kill-zone, run; retreat is a dead-end wall).
@@ -62,12 +76,19 @@ and tactics (3+ visible = kill-zone, run; retreat is a dead-end wall).
 ```
 VizDoom (60fps render, sync mode)
   -> every N tics: snapshot to JSON (sectors, bearings, wall map)
-  -> Jev, 1 call, 2-3 questions in parallel -> discrete action
+  -> Jev, 1 call, 3 questions in parallel -> target idx + shoot/hold
   -> confidence gating + survival reflexes in code
+  -> while the next answer is in flight (~290ms ≈ 10 tics): code keeps
+     the picked target centered at 4-tic cadence and re-fires only if
+     Jev's last answer was `shoot` (defend/basic/simple)
 ```
 
-Jev decides *what*; code handles *how long* (hold tics) and safety
-overrides (dodge at critical danger, ammo gates, semi-auto release).
+Jev decides *what* (which enemy, whether to shoot); code handles *how*
+(bearing-proportional turns, hold tics, the latency-gap tracker) and
+safety overrides (dodge at critical danger, ammo gates, semi-auto
+release). Answers are validated fail-closed (choice must be one of the
+offered ids, probabilities must sum to 1) — an invalid target answer
+counts as `none`.
 
 ## Action spaces
 
@@ -78,9 +99,9 @@ to a button vector held for a fixed number of tics (35 tics = 1 game second).
 
 | Jev question | Options | Mapping |
 |---|---|---|
-| aim: Choice(3) | left / center / right | turn toward most threatening sector, 16 tics (~7°) |
-| fire: Noul | p ≥ 0.65 + centered + ammo | ATTACK 2 tics + 2 release (semi-auto re-press) |
-| danger: Score(0–2) | — | < 0.8 conf → keep sweeping last turn direction |
+| target: Choice(N+1), built per snapshot | enemy `idx` … / none | turn toward that enemy, bearing-proportional, 2–4 tics; latency gap tracks it; none/invalid → alternating scan |
+| fire: Choice(2) | shoot / hold (rule: `side = centered` AND `visible`) | ATTACK 2 tics + 2 release; chained bursts up to 12 tics; the gap tracker re-fires only after `shoot` |
+| danger: Score(0–2) | — | ≥ 1.7 → single bursts only |
 
 **basic / simpler_basic** (3 buttons: MOVE_LEFT, MOVE_RIGHT, ATTACK)
 
@@ -108,7 +129,7 @@ monster-vs-pickup filtering via label categories.
 
 | Scenario | Best | Notes |
 |---|---|---|
-| defend_the_center | **4 kills** (6 bullets, 43 decisions) | kill every episode; pistol vs demons caps survival |
+| defend_the_center | **13 kills** (26 bullets, 64 decisions, seed 4) | suite mean 10.20±2.04 with indexed target + gap tracking; heuristic 15.2±3.0 |
 | simpler_basic | **win 2/2**, untouched (hp 100) | strafe-to-center, 1–2 bullets per kill |
 | deadly_corridor (skill 5) | **2 kills**, reward 1100 (seed 5; SPEED sprint) | suite mean 0.40±0.80 kills, 675±244 reward — progress, not kills, is the score |
 
@@ -172,6 +193,33 @@ dead in 22 decisions) dominate the mean. Chained bursts help iff targets
 survive the first burst; the binding constraint is now shoot-pick
 frequency, not hold length.
 
+Indexed target + latency-gap tracking (context injection reworked
+after jev-ultrafast / jev-flappy-bird: `target` Choice keyed by enemy
+idx built per snapshot, `side` word buckets matching the criteria,
+`recent` 5-step history, latency lead, and the ~10-tic API gap spent
+re-aiming at the picked target instead of repeating the last button):
+seeds 1–5 → kills 7,11,11,13,9 = **10.20±2.04 mean**, 4/5 episodes
+emptied the magazine (26 bullets), 37–64 decisions, median lead 11
+tics. Heuristic baseline on the same seeds: 13–18 (15.2±3.0). The
+unlock is decision granularity: Jev picks *who* at ~3 Hz, code keeps
+the crosshair on them at ~9 Hz. Remaining gap to the heuristic is
+accuracy (0.35–0.50 vs 0.50–0.69): the tracker fires on `visible` +
+`centered`, the heuristic waits for ±8°.
+
+| seed | kills | bullets | acc | reward |
+|---|---|---|---|---|
+| 1 | 7 | 22 | 0.32 | 7 |
+| 2 | 11 | 26 | 0.42 | 11 |
+| 3 | 11 | 26 | 0.42 | 11 |
+| 4 | 13 | 26 | 0.50 | 13 |
+| 5 | 9 | 26 | 0.35 | 9 |
+| mean±std | 10.20±2.04 | — | — | 10.2±2.0 |
+
+Corridor on the same build (target head added to the request, consumed
+only for turn holds; `_extend` hold unchanged): rewards
+307,644,577,584,1081 = **639±252** (was 675±244) — no regression,
+still no shooting (see the footnote below).
+
 Latest corridor suite (same build; SPEED auto-run on locomotion):
 
 | seed | kills | bullets | reward |
@@ -195,9 +243,16 @@ diverge. *Jev* is not — two identical seed-1 runs gave 26 vs 28 decisions
 (d1 fire 0.68 vs 0.70). Same outcome here (1 kill), but treat single runs as
 samples and compare suite mean/std.
 
-## Cost (measured, 10-decision corridor episode, v2 context)
+## Cost (measured)
 
-Per decision: 1389 input / 109 output tokens, ~290ms.
+v2 context, 10-decision corridor episode: 1389 input / 109 output
+tokens, ~290ms per decision.
+
+v3 context (indexed target + rules + recent + lead), 37-decision defend
+episode: 2243 input / 94 output tokens, ~300ms per decision. The extra
+~850 input tokens are the shared `rules` list (sent with each of the 3
+questions), the 5-step `recent` window and the per-enemy target
+criteria.
 
 | Model | $/MTok in | $/MTok out | Per episode | vs Jev |
 |---|---|---|---|---|
