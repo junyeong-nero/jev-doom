@@ -92,6 +92,15 @@ TURN_TICS_MAX = 4        # cap a single hold: re-aim every 4 tics like their bot
 MOVE_TICS = 4            # corridor locomotion hold per decision (their cadence)
 FIRE_TICS = 2           # press held 2 tics (see play.py: always followed by release)
 RELEASE_TICS = 2        # release after every shot: pistol is semi-auto, needs re-press
+# Issue-21 sustained fire (defend ONLY): chained-burst tuning.
+# Consecutive shoot picks on a centered+visible, non-far target extend the
+# fire hold by BURST_STEP_TICS each, up to BURST_MAX_TICS. At/above
+# BURST_DANGER_HI the bot fires single bursts only: under heavy fire the
+# next decision must come fast (turn/move corrections), so survival wins
+# over volume.
+BURST_MAX_TICS = 12     # hard cap: one fire hold never exceeds ~1/3 game-second
+BURST_STEP_TICS = 2     # +hold per consecutive shoot decision
+BURST_DANGER_HI = 1.7   # at/above: single bursts only (same scale as DODGE_DANGER)
 SWITCH_TICS = 6         # weapon-switch press hold (raise animation)
 SWEEP_CONFIDENCE = 0.8  # below this, keep sweeping last turn direction (anti-jitter)
 CENTER_DEGREES = 10     # |bearing| within this counts as "centered" (matches ±8-10 rule-style firing)

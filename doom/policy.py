@@ -84,6 +84,11 @@ COVER_TTL = 4  # decisions a cover move stays "active" for success check
 _turn_left_n = 0
 _turn_right_n = 0
 
+#: Issue-21 sustained-fire streak: consecutive defend decisions that fired
+#: on a centered+visible, non-far target. Drives chained-burst holds.
+#: Reset by any non-chained defend decision and every reset_episode().
+_fire_streak = 0
+
 #: Opening sprint: first N corridor decisions always advance, to clear
 #: the spawn kill-zone before fighting. (Learned from a scripted rush
 #: scoring +495 vs -16 dodging in place.)
@@ -94,7 +99,7 @@ def reset_episode() -> None:
     global _corridor_decisions, _last_seen, _prev_hits
     global _cover_active, _cover_visible_before, _cover_ttl
     global _turn_left_n, _turn_right_n
-    global _scan_turn
+    global _scan_turn, _fire_streak
     _corridor_decisions = 0
     _last_seen = None
     _prev_hits = None
@@ -104,6 +109,7 @@ def reset_episode() -> None:
     _turn_left_n = 0
     _turn_right_n = 0
     _scan_turn = [0, 1, 0]
+    _fire_streak = 0
 
 
 def _visible_count(snapshot: dict) -> int:
@@ -305,6 +311,23 @@ def _note_turn(vec: list) -> None:
         _turn_right_n += 1
 
 
+def _chainable_target(snapshot: dict) -> bool:
+    """Issue-21: may a chained burst fire at this snapshot?
+
+    Requires a centered+visible enemy at close/mid range. Far-range
+    targets never chain (pistol waste — out of scope to fix for single
+    shots, but bursts must not amplify it).
+    """
+    if not snapshot.get("center_visible"):
+        return False
+    near = min(
+        (e["dist"] for e in snapshot.get("enemies", [])
+         if e.get("visible") and abs(e.get("bearing", 999)) <= C.CENTER_DEGREES),
+        default=None,
+    )
+    return near is not None and near < C.MID_DIST
+
+
 def to_action(answers: dict, snapshot: dict,
               last_turn: list | None = None,
               scenario: str = "defend",
@@ -317,6 +340,7 @@ def to_action(answers: dict, snapshot: dict,
     """
     if scenario == "corridor":
         return _corridor_action(answers, snapshot)
+    global _fire_streak
     ammo = snapshot["player"]["ammo"]
     aim = answers["aim"]
     fire_ans = answers.get("fire", {})
@@ -344,7 +368,32 @@ def to_action(answers: dict, snapshot: dict,
         reason = f"fire p={fire_p:.2f} (legacy noul)"
     if attack:
         _sense(snapshot)  # keep threat memory fresh even while firing
+        if _chainable_target(snapshot):
+            # Issue-21 sustained fire: target is STILL centered+visible at
+            # close/mid range, so chain the burst — longer holds on
+            # consecutive shoot picks, hard-capped so one hold can never
+            # freeze the bot (BURST_MAX_TICS ~ 1/3 game-second; the next
+            # decision re-extends anyway, so the cap bounds lockup, not
+            # total volume). Under heavy fire (danger high) fire single
+            # bursts only: the next decision must come fast for aim/dodge
+            # corrections, so survival wins over volume.
+            _fire_streak += 1
+            danger = answers.get("danger", {}).get("score", 0.0)
+            if danger >= C.BURST_DANGER_HI:
+                tics = C.FIRE_TICS
+            else:
+                tics = min(C.FIRE_TICS
+                            + C.BURST_STEP_TICS * (_fire_streak - 1),
+                            C.BURST_MAX_TICS)
+            return [0, 0, 1], tics, (
+                f"{reason} burst x{_fire_streak} tics={tics} "
+                f"danger={danger:.2f}")
+        # Firing blind (no centered+visible target) or at far range:
+        # single shot only, chain broken — never spray blind.
+        _fire_streak = 0
         return [0, 0, 1], C.FIRE_TICS, reason
+    # Not firing: any chain ends here (bursts need consecutive shoots).
+    _fire_streak = 0
 
     # Issue-3: hit from off-screen with no strafe buttons here -> turn to
     # face the most recently visible threat sector.
