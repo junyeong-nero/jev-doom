@@ -74,7 +74,7 @@ QUESTIONS = {
 }
 
 # Decision thresholds / timing
-FIRE_THRESHOLD = {"defend": 0.65, "basic": 0.5, "simple": 0.5}  # 50 bullets vs 400HP -> volume
+FIRE_THRESHOLD = {"defend": 0.4, "basic": 0.5, "simple": 0.5}  # defend loosened: explicit numeric rule fires more (cf. jev-plays-doom rule criteria)
 TURN_TICS = 16           # fallback turn hold when no visible target bears on the sector
 TURN_DEG_PER_TIC = 0.44  # measured turn rate: proportional holds = round(|bearing| / 0.44)
 TURN_TICS_MIN = 2        # smallest turn: micro-adjusts land at 2-4 tics
@@ -85,7 +85,7 @@ FIRE_TICS = 2           # press held 2 tics (see play.py: always followed by rel
 RELEASE_TICS = 2        # release after every shot: pistol is semi-auto, needs re-press
 SWITCH_TICS = 6         # weapon-switch press hold (raise animation)
 SWEEP_CONFIDENCE = 0.8  # below this, keep sweeping last turn direction (anti-jitter)
-CENTER_DEGREES = 6      # |bearing| within this counts as "centered"
+CENTER_DEGREES = 10     # |bearing| within this counts as "centered" (matches ±8-10 rule-style firing)
 CLOSE_DIST = 300.0      # world units: below = close
 MID_DIST = 700.0        # below = mid, else far
 
@@ -100,7 +100,7 @@ CORRIDOR_QUESTIONS = {
             "against 6 armed shooters at max aggression (they focus fire). "
             "Goal: push forward, kill them, survive. "
             "HOW TO READ THE STATE: bearing is degrees, negative = LEFT, "
-            "positive = RIGHT, 0 = straight ahead; |bearing| <= 6 counts as "
+            "positive = RIGHT, 0 = straight ahead; |bearing| <= 10 counts as "
             "centered. dist is world units (~400 = mid-corridor). visible = "
             "on screen right now. closing = moving toward you. path shows "
             "nearby walls per sector (wall = blocked that way). last shows "

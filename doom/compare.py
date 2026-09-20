@@ -1,9 +1,10 @@
-"""Human vs Jev scoreboard from runs/ logs.
+"""Human vs Jev vs heuristic scoreboard from runs/ logs.
 
 Usage: uv run python -m doom.compare [--scenario defend]
 
 Seeded runs (filenames with _seed<N>, see `doom.play --suite`) get an
 extra per-seed table with mean/std. Unseeded logs render exactly as before.
+Heuristic baselines (`--brain heuristic`) are listed as `heuristic`.
 """
 import argparse
 import glob
@@ -83,24 +84,30 @@ def main() -> None:
                 continue
             else:
                 e = load_bot(p, scenario)
+                if "_heuristic" in name:
+                    e["who"] = "heuristic"
             if e:
                 entries.append(e)
         if not entries:
             print("  (no runs yet)")
             continue
-        print(f"  {'who':<6} {'kills':>5} {'bullets':>7} {'acc':>6}  note")
+        print(f"  {'who':<9} {'kills':>5} {'bullets':>7} {'acc':>6}  note")
         for e in entries:
             acc = f"{e['kills'] / e['bullets']:.2f}" if e["bullets"] else "-"
-            extra = f"{e.get('decisions', '')} decisions" if e["who"] == "jev" \
-                else f"{e.get('tics', '')} tics survived"
-            print(f"  {e['who']:<6} {e['kills']:>5} {e['bullets']:>7} "
+            extra = (f"{e.get('decisions', '')} decisions"
+                     if e["who"] in ("jev", "heuristic")
+                     else f"{e.get('tics', '')} tics survived")
+            print(f"  {e['who']:<9} {e['kills']:>5} {e['bullets']:>7} "
                   f"{acc:>6}  {extra} ({e['path']})")
-        seeded = sorted(
-            (e for e in entries if e["who"] == "jev" and e.get("seed") is not None),
-            key=lambda e: e["seed"],
-        )
-        if seeded:
-            print(f"  -- seeded suite (n={len(seeded)}) --")
+        for who in ("jev", "heuristic"):
+            seeded = sorted(
+                (e for e in entries
+                 if e["who"] == who and e.get("seed") is not None),
+                key=lambda e: e["seed"],
+            )
+            if not seeded:
+                continue
+            print(f"  -- {who} seeded suite (n={len(seeded)}) --")
             print(f"  {'seed':>4} {'kills':>5} {'bullets':>7} {'acc':>6} "
                   f"{'reward':>7}  note")
             for e in seeded:

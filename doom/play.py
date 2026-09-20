@@ -72,6 +72,79 @@ def _extend(game, action: list, frames: list | None, done,
         i += 1
 
 
+#: Heuristic baseline (mirrors tirukovelamanoj/jev-plays-doom rule brain):
+#: nearest-by-distance target, fire within ±8°, else turn/strafe toward it.
+#: Ours: negative bearing = LEFT. 3-button scenarios only (no API calls).
+HEURISTIC_FIRE_DEG = 8
+HEURISTIC_TURN_TICS = 4  # their cadence: fast re-aim, no settling
+
+
+def heuristic_action(snapshot: dict, scenario: str) -> tuple[list, int, str]:
+    enemies = snapshot.get("enemies", [])
+    vis = [e for e in enemies if e.get("visible")]
+    pool = vis or enemies  # aim at off-screen bearings too (they do)
+    if not pool:
+        return [0, 0, 0], C.TURN_TICS, "heuristic: no target"
+    tgt = min(pool, key=lambda e: e["dist"])  # nearest by DISTANCE (anti-spin)
+    b = tgt["bearing"]
+    if abs(b) <= HEURISTIC_FIRE_DEG:
+        return [0, 0, 1], C.FIRE_TICS, f"heuristic fire b={b}"
+    vec = [1, 0, 0] if b < 0 else [0, 1, 0]  # left / right (or strafe)
+    return vec, HEURISTIC_TURN_TICS, f"heuristic turn b={b}"
+
+
+def run_heuristic_episode(game, log, scenario: str = "defend",
+                          frames: list | None = None,
+                          seed: int | None = None) -> dict:
+    """No-API baseline with the same log schema as the Jev loop."""
+    if seed is not None:
+        game.set_seed(seed)
+    game.new_episode()
+    reset_episode()
+    decisions, shots = 0, 0
+    atk_idx = C.ATTACK_IDX.get(scenario, 2)
+    while not game.is_episode_finished():
+        state = game.get_state()
+        if state is None:
+            break
+        if frames is not None and state.screen_buffer is not None:
+            frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
+        snapshot = encode(state, list(state.game_variables))
+        action, tics, reason = heuristic_action(snapshot, scenario)
+        if action[atk_idx]:
+            shots += 1
+            _step(game, action, tics, frames)
+            _step(game, [0] * len(action), C.RELEASE_TICS, frames)
+        else:
+            _step(game, action, tics, frames)
+        decisions += 1
+        fired = bool(action[atk_idx])
+        aim = ("center" if fired else
+               "left" if action[0] else "right" if action[1] else "center")
+        vis_close = any(e.get("visible") and e.get("range") == "close"
+                        for e in snapshot.get("enemies", []))
+        vis_any = any(e.get("visible") for e in snapshot.get("enemies", []))
+        log({
+            "aim": aim, "aim_conf": 1.0,
+            "fire": 1.0 if fired else 0.0,
+            "danger": 2.0 if vis_close else 1.0 if vis_any else 0.0,
+            "action": action, "reason": reason, "ms": 0,
+            "in_tok": 0, "out_tok": 0,
+            "hp": snapshot["player"]["health"],
+            "ammo": snapshot["player"]["ammo"],
+            "kills": snapshot["player"]["kills"],
+            "focus": None,
+        })
+        if decisions == 1 or decisions % 50 == 0:
+            print(f"  d{decisions}: {reason} "
+                  f"hp={snapshot['player']['health']:.0f} "
+                  f"ammo={snapshot['player']['ammo']:.0f} "
+                  f"kills={snapshot['player']['kills']}", flush=True)
+    total = game.get_total_reward()
+    return {"decisions": decisions, "shots": shots, "avg_ms": 0,
+            "reward": total}
+
+
 #: Focus coast: decisions a lost (unseen, no kill credit) target is held
 #: via its last-seen bearing before it counts as fully lost.
 FOCUS_MAX_MISSES = 3
@@ -301,9 +374,16 @@ def main() -> None:
     ap.add_argument("--suite", action="store_true",
                     help=f"run the fixed seed suite {SEED_SUITE} "
                          "(overrides --episodes/--seed)")
+    ap.add_argument("--brain", choices=["jev", "heuristic"], default="jev",
+                    help="jev: TypeSafe API policy; heuristic: no-API "
+                         "geometry baseline (defend/basic/simple only)")
     args = ap.parse_args()
 
-    if not C.API_KEY:
+    if args.brain == "heuristic" and args.scenario == "corridor":
+        sys.exit("heuristic brain supports defend/basic/simple only "
+                 "(3-button layouts)")
+
+    if args.brain == "jev" and not C.API_KEY:
         sys.exit("no API key: set TYPESAFE_API_KEY or JEV_APIKEY in .env")
 
     run_dir = Path("runs")
@@ -322,17 +402,24 @@ def main() -> None:
         with httpx.Client(timeout=25) as client:
             for ep, seed in enumerate(seeds):
                 suffix = f"_seed{seed}" if seed is not None else ""
-                path = run_dir / f"{ts}_{args.scenario}_ep{ep}{suffix}.jsonl"
-                print(f"episode {ep} (seed={seed}) -> {path}", flush=True)
+                btag = "_heuristic" if args.brain == "heuristic" else ""
+                path = run_dir / f"{ts}_{args.scenario}_ep{ep}{suffix}{btag}.jsonl"
+                print(f"episode {ep} (seed={seed}, brain={args.brain}) -> {path}",
+                      flush=True)
                 frames = [] if args.record else None
                 with open(path, "w") as f:
                     def log(obj, f=f):
                         f.write(json.dumps(obj) + "\n")
-                    s = run_episode(game, client, log, args.scenario, frames,
-                                    seed=seed)
+                    if args.brain == "heuristic":
+                        s = run_heuristic_episode(game, log, args.scenario,
+                                                  frames, seed=seed)
+                    else:
+                        s = run_episode(game, client, log, args.scenario,
+                                        frames, seed=seed)
                 if frames:
                     import numpy as np
-                    fpath = run_dir / f"{ts}_{args.scenario}_ep{ep}{suffix}_frames.npz"
+                    fpath = (run_dir /
+                             f"{ts}_{args.scenario}_ep{ep}{suffix}{btag}_frames.npz")
                     np.savez_compressed(fpath, frames=np.stack(frames))
                     print(f"saved {len(frames)} frames -> {fpath}", flush=True)
                 import vizdoom as vzd
@@ -347,7 +434,8 @@ def main() -> None:
                 print(f"episode {ep} done: {s}", flush=True)
                 with open(str(path).replace(".jsonl", ".summary.json"), "w") as f:
                     json.dump({**s, "scenario": args.scenario,
-                               "path": str(path)}, f, indent=1)
+                               "brain": args.brain, "path": str(path)}, f,
+                              indent=1)
     finally:
         game.close()
 

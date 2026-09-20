@@ -139,6 +139,12 @@ Latest defend suite (2026-09-20, merged main — aim/focus/cover/async live):
 | 5 | 1 | 2 | 0.50 | 1 |
 | mean±std | 1.20±0.40 | — | — | 1.2±0.4 |
 
+Relaxed fire gates (Noul 0.65→0.4, center 6→10°, no settle-observe):
+seeds 1–5 → kills 1,2,2,1,1 = **1.4 mean**. Barely moved — Jev's Noul
+output itself caps at ~0.3–0.4 mean, so thresholds aren't the bottleneck.
+Their rule-vs-intent experiment says the fix is a numeric firing rule in
+the criteria, not a lower threshold. That's the next experiment.
+
 Latest corridor suite (same build; SPEED auto-run on locomotion):
 
 | seed | kills | bullets | reward |
@@ -180,18 +186,34 @@ LLM side assumes minimal structured JSON output (a lower bound — real
 reasoning traces cost more and answer in seconds, not 250ms).
 Rates: TypeSafe blog (Jev), OpenAI/Anthropic public pricing (Sep 2026).
 
-## Human vs Jev
+## Human vs Jev vs heuristic
 
 Same maps, same rules, winner takes the scoreboard:
 
 ```sh
 uv run python -m doom.human --scenario defend  # arrows + space
 uv run python -m doom.human --scenario corridor  # WASD + arrows + space
+uv run python -m doom.play --scenario defend --brain heuristic --suite  # no-API baseline
 uv run python -m doom.compare
 ```
 
-Score = kills / bullets / accuracy. Jev's defend record: 4 kills at 0.67
-per bullet. Corridor is open season — no human score posted yet.
+Score = kills / bullets / accuracy. defend suite (seeds 1–5):
+**heuristic 14.8** (13–18) vs **Jev 1.2–1.4**. The baseline sprays all 26
+bullets (±8° rule, 4-tic cadence); Jev dies with 90% ammo unspent.
+Fire volume wins — which is exactly what the fire-gate experiment below tests.
+
+### External comparison: tirukovelamanoj/jev-plays-doom
+
+Same wad, same skill/timeout, their Jev scores **6.55**/ep (20 eps, seed 1234,
+metric = total_reward). Same-seed check with our heuristic: **9** vs their
+6.55 heuristic-mean — same ballpark, no 3x gap; our 13–18s are seed luck plus
+full-mag dumping. Methodology deltas that matter: their fire rule is a single
+numeric Choice (±8°, shoot the moment aligned); ours gates through aim Choice
+\+ fire Noul + confidence. Their "decoration" filter on MarineChainsawVzd we
+reject: idling proves marines advance and kill you (100→dead in ~10 iters),
+so our KILLCOUNT stands — but note their kills skew toward demons, ours
+include the 1-bullet marines. Apples-to-apples needs the same target set;
+that plus a shared seed is the next comparison upgrade.
 
 ## Things learned (the hard way)
 

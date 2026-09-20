@@ -309,18 +309,16 @@ def to_action(answers: dict, snapshot: dict,
         return [0, 0, 1], C.FIRE_TICS, f"fire p={fire_p:.2f}"
 
     # Issue-3: hit from off-screen with no strafe buttons here -> turn to
-    # face the most recently visible threat sector. Takes precedence over
-    # the settle-observe: damage is urgent, patience is not.
+    # face the most recently visible threat sector.
     took_damage, _ = _sense(snapshot)
     if (took_damage and not snapshot["center_visible"]
             and _last_seen in ("left", "right")):
         vec = [1, 0, 0] if _last_seen == "left" else [0, 1, 0]
         return vec, C.TURN_TICS, f"face threat {_last_seen} (damage, none visible)"
 
-    if after_turn:
-        # One settling observation after a turn (anti-overshoot); the next
-        # decision re-aims from a fresh snapshot.
-        return [0, 0, 0], C.OBSERVE_TICS, "observe after turn"
+    # NOTE: no settle-observe after turns (removed): with an explicit numeric
+    # fire rule the bot re-aims immediately instead of pausing.
+    _ = after_turn
 
     if aim["confidence"] >= C.SWEEP_CONFIDENCE:
         if aim["choice"] == "left":
