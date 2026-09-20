@@ -7,6 +7,10 @@ import pytest
 # DAMAGECOUNT, SELECTED_WEAPON, SELECTED_WEAPON_AMMO, WEAPON3, AMMO1]
 VARS = [100.0, 52.0, 0.0, 0.0, 0.0, 0.0, 2.0, 52.0, 0.0, 0.0]
 
+# Defend-family game vars: [HEALTH, AMMO2, KILLCOUNT, ANGLE, HITS_TAKEN,
+# DAMAGECOUNT] (26 bullets, the loadout the 10.20±2.04 suite used)
+VARS_DEFEND = [100.0, 26.0, 0.0, 0.0, 0.0, 0.0]
+
 
 def obj(id, name, x, y, vx=0.0, vy=0.0):
     return NS(id=id, name=name, position_x=x, position_y=y,
