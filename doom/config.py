@@ -85,7 +85,9 @@ CORRIDOR_QUESTIONS = {
             "on screen right now. closing = moving toward you. path shows "
             "nearby walls per sector (wall = blocked that way). last shows "
             "what your previous pick cost: hp_change (damage taken), "
-            "ammo_used, kills_change. "
+            "ammo_used, kills_change. player.hits_taken and player.damage "
+            "are cumulative counters of hits suffered: rising values mean "
+            "you are being shot even when no enemy is visible. "
             "YOUR ARSENAL: one pistol, {ammo} bullets left. It fires short "
             "bursts; every enemy needs multiple hits. Do not waste bullets "
             "at far range. "
@@ -99,14 +101,24 @@ CORRIDOR_QUESTIONS = {
             "fast, you are standing in fire: strafe sideways (keeps your "
             "aim) or advance out of it. Retreat is a dead-end wall, never "
             "retreat twice in a row. "
+            "COVER: path shows walls per sector and I sidestep toward a "
+            "wall sector on my own when hit with nothing visible ahead, "
+            "so help me: if you see path.left or path.right is wall, "
+            "prefer strafing to that wall side to break line-of-sight "
+            "instead of standing center. If enemies disappear from view "
+            "right after I move sideways, I found cover: hold the angle, "
+            "peek with strafe_fire, do not walk back into the open. "
+            "If I take damage with nothing visible ahead, the shot came "
+            "from a flank: turn toward the side where enemies were last "
+            "seen rather than firing blind. "
             "Advance only when center path is open. If your shots keep "
             "missing (ammo_used up, kills_change 0), close distance first."
         ),
         "criteria": {
             "advance": "Sprint forward: path center open, no close threat",
             "retreat": "EMERGENCY only: one step back from a point-blank threat",
-            "strafe_left": "Sidestep left under fire, or circle toward a left threat",
-            "strafe_right": "Sidestep right under fire, or circle toward a right threat",
+            "strafe_left": "Sidestep left under fire, circle toward a left threat, or hug left wall cover",
+            "strafe_right": "Sidestep right under fire, circle toward a right threat, or hug right wall cover",
             "turn_left": "Threat is far left: rotate to face it",
             "turn_right": "Threat is far right: rotate to face it",
             "attack": "Clean kill shot: enemy centered AND visible AND close/mid",

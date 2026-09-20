@@ -38,6 +38,10 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
     """
     health, ammo, kills = (float(game_vars[i]) for i in range(3))
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
+    # Issue-3: appended by doom_env (HITS_TAKEN, DAMAGECOUNT). Length-guarded
+    # so older recordings / builds without them still decode.
+    hits_taken = float(game_vars[4]) if len(game_vars) > 4 else None
+    damage = float(game_vars[5]) if len(game_vars) > 5 else None
 
     px, py = 0.0, 0.0
     for o in state.objects or []:
@@ -108,6 +112,10 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         "sectors": sectors,
         "center_visible": center_visible,
     }
+    if hits_taken is not None:
+        snap["player"]["hits_taken"] = int(hits_taken)
+    if damage is not None:
+        snap["player"]["damage"] = int(damage)
     if last is not None:
         snap["last"] = last
 
