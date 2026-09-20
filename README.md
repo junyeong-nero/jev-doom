@@ -18,7 +18,13 @@ uv run python -m doom.play --brain jev|heuristic --scenario defend|basic|simple|
 <p align="center">
   <img src="assets/corridor_ep.gif" alt="Heuristic bot playing deadly_corridor" width="480" />
   <br />
-  <sub>Opening sprint out of the spawn kill-zone, then strafe-fire down the hallway — full episode is ~100 game-tics, about 3 seconds of Doom time; skill-5 corridor ends runs fast. Full quality: <a href="assets/corridor_ep.mp4">corridor_ep.mp4</a> (a frame every 2 game-tics, 8fps).</sub>
+  <sub>Jev brain, seed 5: sprint down the hallway — 1 kill, reward 1081, ~7 decisions of Doom time; skill-5 corridor ends runs fast. Full quality: <a href="assets/corridor_ep.mp4">corridor_ep.mp4</a> (a frame every 2 game-tics, 8fps).</sub>
+</p>
+
+<p align="center">
+  <img src="assets/defend_ep.gif" alt="Jev playing defend_the_center" width="480" />
+  <br />
+  <sub>Jev brain, seed 4 re-run: 12 kills, magazine emptied, 70 decisions — indexed target + latency-gap tracking. Full quality: <a href="assets/defend_ep.mp4">defend_ep.mp4</a> (8fps).</sub>
 </p>
 
 ## Quickstart
