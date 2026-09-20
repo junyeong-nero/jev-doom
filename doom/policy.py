@@ -63,6 +63,18 @@ def _kite_ok(snapshot: dict) -> bool:
         return False
     return _close_threat_ahead(snapshot)
 
+
+#: Issue-3 threat memory: sector ("left"/"center"/"right") that most
+#: recently held a visible enemy. Updated every decision from the snapshot.
+_last_seen: str | None = None
+#: Issue-3 damage tracking: previous decision's HITS_TAKEN counter.
+_prev_hits: float | None = None
+#: Issue-3 cover state: set when we strafe toward a wall to break LOS.
+_cover_active = False
+_cover_visible_before = 0
+_cover_ttl = 0
+COVER_TTL = 4  # decisions a cover move stays "active" for success check
+
 #: Opening sprint: first N corridor decisions always advance, to clear
 #: the spawn kill-zone before fighting. (Learned from a scripted rush
 #: scoring +495 vs -16 dodging in place.)
@@ -70,16 +82,134 @@ OPENING_SPRINT = 6
 
 
 def reset_episode() -> None:
-    global _corridor_decisions
+    global _corridor_decisions, _last_seen, _prev_hits
+    global _cover_active, _cover_visible_before, _cover_ttl
     _corridor_decisions = 0
+    _last_seen = None
+    _prev_hits = None
+    _cover_active = False
+    _cover_visible_before = 0
+    _cover_ttl = 0
+
+
+def _visible_count(snapshot: dict) -> int:
+    return sum(1 for e in snapshot.get("enemies", []) if e["visible"])
+
+
+def _sense(snapshot: dict) -> tuple[bool, int]:
+    """Update threat memory; return (took_damage, n_visible).
+
+    took_damage is true when the HITS_TAKEN counter rose since the last
+    decision, falling back to last.hp_change < 0 on builds without the
+    counter. _last_seen tracks the sector of the nearest visible enemy.
+    """
+    global _last_seen, _prev_hits
+    nearest = None
+    for e in snapshot.get("enemies", []):
+        if e["visible"] and (nearest is None or e["dist"] < nearest["dist"]):
+            nearest = e
+    if nearest is not None:
+        if nearest["bearing"] < -C.CENTER_DEGREES:
+            _last_seen = "left"
+        elif nearest["bearing"] > C.CENTER_DEGREES:
+            _last_seen = "right"
+        else:
+            _last_seen = "center"
+    hits = snapshot["player"].get("hits_taken")
+    if hits is not None and _prev_hits is not None:
+        took = hits > _prev_hits
+    else:
+        took = snapshot.get("last", {}).get("hp_change", 0) < 0
+    _prev_hits = hits if hits is not None else _prev_hits
+    return took, _visible_count(snapshot)
+
+
+def _cover_side(snapshot: dict) -> str | None:
+    """Which way to strafe for cover, or None when no wall is near.
+
+    Prefers the lone wall side; with walls on both sides hugs the side
+    with fewer visible enemies (breaks the busier sightline first);
+    ties alternate like the dodge reflex.
+    """
+    global _dodge_side
+    path = snapshot.get("path", {})
+    walls = [s for s in ("left", "right") if path.get(s) == "wall"]
+    if not walls:
+        return None
+    if len(walls) == 1:
+        return f"strafe_{walls[0]}"
+    sectors = snapshot.get("sectors", {})
+    lv = sectors.get("left", {}).get("visible", 0)
+    rv = sectors.get("right", {}).get("visible", 0)
+    if lv < rv:
+        return "strafe_left"
+    if rv < lv:
+        return "strafe_right"
+    _dodge_side = ("strafe_right"
+                   if _dodge_side == "strafe_left" else "strafe_left")
+    return _dodge_side
+
+
+def _cover_result(n_visible: int) -> str:
+    """Prefix for this decision's reason when a cover move paid off."""
+    global _cover_active, _cover_ttl
+    prefix = ""
+    if _cover_active:
+        if n_visible < _cover_visible_before:
+            prefix = (f"cover success (visible "
+                      f"{_cover_visible_before}->{n_visible}); ")
+            _cover_active = False
+            _cover_ttl = 0
+        else:
+            _cover_ttl -= 1
+            if _cover_ttl <= 0:
+                _cover_active = False
+    return prefix
 
 
 def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
     global _dodge_side, _corridor_decisions
+    global _cover_active, _cover_visible_before, _cover_ttl
     _corridor_decisions += 1
     if _corridor_decisions <= OPENING_SPRINT:
+        _sense(snapshot)  # warm threat memory / damage baseline for d7+
         vec, tics, _ = C.CORRIDOR_ACTIONS["advance"]
         return vec, tics, "opening sprint"
+    took_damage, n_visible = _sense(snapshot)
+    prefix = _cover_result(n_visible)
+    if took_damage and not snapshot["center_visible"]:
+        # Hit from off-screen: break LOS toward the nearest wall, else
+        # face the most recently seen threat sector. Fallback when even
+        # that is unknown: nearest tracked enemy's sector (off-screen
+        # bearings persist in objects_info, so the likely shooter).
+        side = _cover_side(snapshot)
+        if side is not None:
+            _cover_active = True
+            _cover_visible_before = n_visible
+            _cover_ttl = COVER_TTL
+            vec, tics, _ = C.CORRIDOR_ACTIONS[side]
+            flank = side.split("_")[1]
+            return vec, tics, f"{prefix}seek cover {flank} (damage, nothing ahead)"
+        sector = _last_seen
+        if sector is None:
+            near = min(snapshot.get("enemies", []), key=lambda e: e["dist"],
+                       default=None)
+            if near is not None:
+                sector = ("left" if near["bearing"] < -C.CENTER_DEGREES
+                          else "right" if near["bearing"] > C.CENTER_DEGREES
+                          else "center")
+        if sector in ("left", "right"):
+            turn = f"turn_{sector}"
+            vec, tics, _ = C.CORRIDOR_ACTIONS[turn]
+            return vec, tics, f"{prefix}face threat {sector} (damage, none visible)"
+    # Pickup code gate: take the bigger gun as soon as it can fire.
+    # (Pressing select while already on shotgun is a harmless no-op,
+    # so an unknown selected_weapon still switches.)
+    p = snapshot["player"]
+    if (p.get("shotgun_owned") and p.get("shells", 0) > 0
+            and p.get("selected_weapon") != 3):
+        vec, tics, _ = C.CORRIDOR_ACTIONS["switch_to_shotgun"]
+        return vec, tics, f"{prefix}switch to shotgun"
     pick = answers["action"]
     choice, conf = pick["choice"], pick["confidence"]
     danger = answers["danger"]["score"]
@@ -87,15 +217,15 @@ def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
     if choice in ("attack", "strafe_left_fire", "strafe_right_fire"):
         if snapshot["player"]["ammo"] <= 0 or not snapshot["center_visible"]:
             vec, tics, _ = C.CORRIDOR_ACTIONS["advance"]
-            return vec, tics, "downgraded fire (no target/ammo)"
+            return vec, tics, prefix + "downgraded fire (no target/ammo)"
         if danger >= C.DODGE_DANGER and choice == "attack":
             # Never stand still trading fire with 6 shotgunners.
             _dodge_side = ("strafe_right"
                            if _dodge_side == "strafe_left" else "strafe_left")
             vec, tics, _ = C.CORRIDOR_ACTIONS[_dodge_side]
-            return vec, tics, f"dodge (attack@{danger:.1f})"
+            return vec, tics, prefix + f"dodge (attack@{danger:.1f})"
         vec, tics, reason = C.CORRIDOR_ACTIONS[choice]
-        return vec, tics, reason
+        return vec, tics, prefix + reason
 
     # Kiting retreat: single step back from a close frontal threat.
     # Otherwise (no kite target, or would back into a wall twice in a
@@ -111,24 +241,56 @@ def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
         _dodge_side = ("strafe_right"
                        if _dodge_side == "strafe_left" else "strafe_left")
         vec, tics, _ = C.CORRIDOR_ACTIONS[_dodge_side]
-        return vec, tics, f"dodge ({choice}@{danger:.1f})"
+        return vec, tics, prefix + f"dodge ({choice}@{danger:.1f})"
 
     if choice in C.CORRIDOR_ACTIONS:
         vec, tics, reason = C.CORRIDOR_ACTIONS[choice]
         if conf < C.SWEEP_CONFIDENCE:
             vec, tics, _ = C.CORRIDOR_ACTIONS["advance"]
-            return vec, tics, f"advance (low conf {conf:.2f})"
-        return vec, tics, reason
+            return vec, tics, prefix + f"advance (low conf {conf:.2f})"
+        return vec, tics, prefix + reason
     vec, tics, _ = C.CORRIDOR_ACTIONS["advance"]
-    return vec, tics, "advance (fallback)"
+    return vec, tics, prefix + "advance (fallback)"
+
+
+def _in_sector(bearing: float, sector: str) -> bool:
+    """Mirror encoder.py sector bounds (CENTER_DEGREES edges)."""
+    c = C.CENTER_DEGREES
+    if sector == "left":
+        return -180 <= bearing < -c
+    if sector == "right":
+        return c <= bearing <= 180
+    return -c <= bearing < c
+
+
+def _turn_tics(snapshot: dict, sector: str) -> tuple[int, float | None]:
+    """Bearing-proportional turn hold for the named sector.
+
+    Uses the nearest VISIBLE enemy in that sector; falls back to
+    C.TURN_TICS when none is visible. Returns (tics, bearing_or_None).
+    """
+    cands = [e for e in snapshot.get("enemies", [])
+             if e.get("visible") and _in_sector(e.get("bearing", 999), sector)]
+    if not cands:
+        return C.TURN_TICS, None
+    tgt = min(cands, key=lambda e: e.get("dist", 1 << 30))
+    tics = max(C.TURN_TICS_MIN,
+               round(abs(tgt["bearing"]) / C.TURN_DEG_PER_TIC))
+    # Merger cap: a single hold must never freeze the bot (180 deg would be
+    # ~409 tics ~ 12 game-seconds of standing still). Re-aim next decision.
+    tics = min(tics, C.TURN_TICS_MAX)
+    return tics, tgt["bearing"]
 
 
 def to_action(answers: dict, snapshot: dict,
               last_turn: list | None = None,
-              scenario: str = "defend") -> tuple[list, int, str]:
+              scenario: str = "defend",
+              after_turn: bool = False) -> tuple[list, int, str]:
     """Map answers to ([left, right, attack], hold_tics, reason).
 
     last_turn: previous turn vector ([1,0,0] or [0,1,0]) for sweep hysteresis.
+    after_turn: previous action was a turn -> one observation decision
+        (anti-overshoot) before turning again.
     """
     if scenario == "corridor":
         return _corridor_action(answers, snapshot)
@@ -143,13 +305,34 @@ def to_action(answers: dict, snapshot: dict,
         and snapshot["center_visible"]
     )
     if attack:
+        _sense(snapshot)  # keep threat memory fresh even while firing
         return [0, 0, 1], C.FIRE_TICS, f"fire p={fire_p:.2f}"
+
+    # Issue-3: hit from off-screen with no strafe buttons here -> turn to
+    # face the most recently visible threat sector. Takes precedence over
+    # the settle-observe: damage is urgent, patience is not.
+    took_damage, _ = _sense(snapshot)
+    if (took_damage and not snapshot["center_visible"]
+            and _last_seen in ("left", "right")):
+        vec = [1, 0, 0] if _last_seen == "left" else [0, 1, 0]
+        return vec, C.TURN_TICS, f"face threat {_last_seen} (damage, none visible)"
+
+    if after_turn:
+        # One settling observation after a turn (anti-overshoot); the next
+        # decision re-aims from a fresh snapshot.
+        return [0, 0, 0], C.OBSERVE_TICS, "observe after turn"
 
     if aim["confidence"] >= C.SWEEP_CONFIDENCE:
         if aim["choice"] == "left":
-            return [1, 0, 0], C.TURN_TICS, "aim left"
+            tics, b = _turn_tics(snapshot, "left")
+            if b is None:
+                return [1, 0, 0], tics, "aim left (no visible target)"
+            return [1, 0, 0], tics, f"aim left b={b} tics={tics}"
         if aim["choice"] == "right":
-            return [0, 1, 0], C.TURN_TICS, "aim right"
+            tics, b = _turn_tics(snapshot, "right")
+            if b is None:
+                return [0, 1, 0], tics, "aim right (no visible target)"
+            return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
         return [0, 0, 0], C.TURN_TICS, "aim center"
 
     # low confidence: keep sweeping instead of jittering

@@ -1,13 +1,27 @@
 """Human vs Jev scoreboard from runs/ logs.
 
 Usage: uv run python -m doom.compare [--scenario defend]
+
+Seeded runs (filenames with _seed<N>, see `doom.play --suite`) get an
+extra per-seed table with mean/std. Unseeded logs render exactly as before.
 """
 import argparse
 import glob
 import json
+import re
+import statistics
 from pathlib import Path
 
 START_AMMO = {"defend": 26, "basic": 50, "simple": 50, "corridor": 52}
+
+SEED_RE = re.compile(r"_seed(\d+)")
+
+
+def _seed_of(path: str, summary: dict) -> int | None:
+    if isinstance(summary.get("seed"), int):
+        return summary["seed"]
+    m = SEED_RE.search(Path(path).name)
+    return int(m.group(1)) if m else None
 
 
 def load_bot(path: str, scenario: str) -> dict:
@@ -22,6 +36,7 @@ def load_bot(path: str, scenario: str) -> dict:
               if rows else 0)
         return {"who": "jev", "kills": kills, "bullets": int(max(bullets, 0)),
                 "decisions": s.get("decisions", len(rows)), "avg_ms": ms,
+                "reward": s.get("reward"), "seed": _seed_of(path, s),
                 "path": Path(path).name}
     except FileNotFoundError:
         pass
@@ -33,6 +48,7 @@ def load_bot(path: str, scenario: str) -> dict:
     return {"who": "jev", "kills": kills, "bullets": int(max(bullets, 0)),
             "decisions": len(rows),
             "avg_ms": round(sum(r.get("ms", 0) for r in rows) / len(rows)),
+            "reward": None, "seed": _seed_of(path, {}),
             "path": Path(path).name + " (~kills, 구 로그)"}
 
 
@@ -79,6 +95,34 @@ def main() -> None:
                 else f"{e.get('tics', '')} tics survived"
             print(f"  {e['who']:<6} {e['kills']:>5} {e['bullets']:>7} "
                   f"{acc:>6}  {extra} ({e['path']})")
+        seeded = sorted(
+            (e for e in entries if e["who"] == "jev" and e.get("seed") is not None),
+            key=lambda e: e["seed"],
+        )
+        if seeded:
+            print(f"  -- seeded suite (n={len(seeded)}) --")
+            print(f"  {'seed':>4} {'kills':>5} {'bullets':>7} {'acc':>6} "
+                  f"{'reward':>7}  note")
+            for e in seeded:
+                acc = f"{e['kills'] / e['bullets']:.2f}" if e["bullets"] else "-"
+                rw = f"{e['reward']:.0f}" if e.get("reward") is not None else "-"
+                print(f"  {e['seed']:>4} {e['kills']:>5} {e['bullets']:>7} "
+                      f"{acc:>6} {rw:>7}  ({e['path']})")
+            kills = [e["kills"] for e in seeded]
+            rws = [e["reward"] for e in seeded
+                   if e.get("reward") is not None]
+            k_mean, k_std = statistics.fmean(kills), _std(kills)
+            if rws:
+                r_mean, r_std = statistics.fmean(rws), _std(rws)
+                print(f"  mean±std: kills {k_mean:.2f}±{k_std:.2f}, "
+                      f"reward {r_mean:.0f}±{r_std:.0f} (n={len(seeded)})")
+            else:
+                print(f"  mean±std: kills {k_mean:.2f}±{k_std:.2f} "
+                      f"(n={len(seeded)})")
+
+
+def _std(xs: list) -> float:
+    return statistics.pstdev(xs) if len(xs) > 1 else 0.0
 
 
 if __name__ == "__main__":
