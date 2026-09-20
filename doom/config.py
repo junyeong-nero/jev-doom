@@ -42,6 +42,45 @@ FOCUS_INSTRUCTIONS = (
     "switching to a new target. Finish one enemy before starting another."
 )
 
+# ultrafast-style structured instructions: every question in a request
+# shares RULES_COMMON (how to read the state), plus its own goal. Words
+# here MUST match the snapshot vocabulary exactly (side buckets, ranges):
+# jev-flappy-bird measured a large drop when criteria and state disagreed.
+RULES_COMMON = [
+    "bearing: degrees, negative = LEFT, positive = RIGHT, 0 = straight ahead.",
+    "side: the bearing in words: far_left, left, centered, right, far_right. "
+    "centered means |bearing| <= 10.",
+    "range: close (< 300 units), mid (< 700), far. dist is world units.",
+    "visible: on screen right now. closing: moving toward you.",
+    "idx: the enemy's key in the target question.",
+    "focus: the enemy you picked last time (null when none), with its "
+    "last-seen bearing. Finish it before switching unless a closer visible "
+    "enemy appears.",
+    "recent: your previous decisions, oldest first, with what each cost "
+    "(hp_change, ammo_used, kills_change). last is the most recent one.",
+    "lead_tics: the state is predicted this many game tics ahead, to the "
+    "moment your answer lands.",
+]
+
+TARGET_GOAL = (
+    "Pick the enemy to engage right now by its idx. Prefer close over far, "
+    "visible over off-screen, centered over sides, and keep focus unless a "
+    "better target appeared. Pick none only when no enemy is listed."
+)
+
+FIRE_GOAL = (
+    "Decide whether to shoot RIGHT NOW. Apply this exact rule: if any enemy "
+    "has side = centered AND visible = true, pick shoot; otherwise pick hold. "
+    "Ammo: {ammo} bullets; every enemy needs several hits, so keep picking "
+    "shoot on a centered visible enemy across consecutive decisions."
+)
+
+DANGER_GOAL = "How much danger is the player in from nearby enemies?"
+
+# Scenarios whose latency gap is spent tracking the picked target
+# (3-button layouts: left/right/attack). Corridor keeps the plain hold.
+TRACK_SCENARIOS = ("defend", "basic", "simple")
+
 QUESTIONS = {
     "aim": {
         "type": "choice",
@@ -64,10 +103,10 @@ QUESTIONS = {
         "type": "choice",
         "instructions": FIRE_INSTRUCTIONS,  # formatted with ammo at call time
         "criteria": {
-            "shoot": "An enemy is centered (|bearing| <= 10) AND visible: "
+            "shoot": "An enemy has side = centered AND visible = true: "
                      "fire now",
-            "hold": "No centered visible enemy: hold fire (aim first, "
-                    "save ammo)",
+            "hold": "No enemy is both centered and visible: hold fire "
+                    "(aim first, save ammo)",
         },
     },
     "danger": {

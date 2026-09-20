@@ -1,4 +1,5 @@
 """Jev policy: snapshot -> answers -> button vector."""
+import math
 import time
 
 import httpx
@@ -6,24 +7,111 @@ import httpx
 from . import config as C
 
 
-def _format(questions: dict, snapshot: dict) -> dict:
-    """Fill {ammo} placeholders in question instructions."""
-    out = {}
-    for k, q in questions.items():
-        q = dict(q)
-        if "{ammo}" in q.get("instructions", ""):
-            q["instructions"] = q["instructions"].format(
-                ammo=int(snapshot["player"]["ammo"]))
-        out[k] = q
-    return out
+def target_ids(snapshot: dict) -> list[str]:
+    """Choice keys for the dynamic target question (enemy idx + none)."""
+    return [str(e["idx"]) for e in snapshot.get("enemies", [])] + ["none"]
+
+
+def validate_choice(answer, ids: list[str]):
+    """ultrafast-style fail-closed check: the answer when it is a
+    well-formed Choice over exactly `ids`, else None. Never raises.
+
+    probabilities are optional (older shapes), but when present they must
+    cover ids exactly, be finite in [0,1], sum to ~1 and agree with choice.
+    """
+    try:
+        choice = answer["choice"]
+        conf = answer["confidence"]
+        if choice not in ids or not isinstance(conf, (int, float)):
+            return None
+        if not math.isfinite(conf) or not 0 <= conf <= 1:
+            return None
+        probs = answer.get("probabilities")
+        if probs is not None:
+            if set(probs) != set(ids):
+                return None
+            vals = list(probs.values())
+            if not all(isinstance(v, (int, float)) and math.isfinite(v)
+                       and 0 <= v <= 1 for v in vals):
+                return None
+            if abs(sum(vals) - 1) >= 0.02:
+                return None
+            if probs[choice] < max(vals) - 1e-6:
+                return None
+        return answer
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def picked_target(answers: dict, snapshot: dict) -> dict | None:
+    """Enemy dict Jev picked in the target question, or None (none/invalid).
+
+    Validation is fail-closed: an out-of-range idx is treated like none.
+    """
+    ans = validate_choice((answers or {}).get("target"), target_ids(snapshot))
+    if ans is None or ans["choice"] == "none":
+        return None
+    idx = int(ans["choice"])
+    return next((e for e in snapshot.get("enemies", []) if e["idx"] == idx),
+                None)
+
+
+def _turn_tics_for(bearing: float) -> int:
+    """Bearing-proportional hold, clamped to [TURN_TICS_MIN, TURN_TICS_MAX]."""
+    return min(C.TURN_TICS_MAX,
+               max(C.TURN_TICS_MIN, round(abs(bearing) / C.TURN_DEG_PER_TIC)))
+
+
+def _target_question(snapshot: dict) -> dict:
+    criteria = {
+        str(e["idx"]): {"type": e["type"], "side": e["side"],
+                        "range": e["range"], "visible": e["visible"],
+                        "closing": e["closing"]}
+        for e in snapshot.get("enemies", [])
+    }
+    criteria["none"] = "No enemy listed / nothing worth engaging"
+    return {"type": "choice",
+            "instructions": {"goal": C.TARGET_GOAL, "rules": C.RULES_COMMON},
+            "criteria": criteria}
+
+
+def build_questions(snapshot: dict, scenario: str) -> dict:
+    """Questions for ONE request, built per snapshot (indexed action space).
+
+    defend-family: target (dynamic, keyed by enemy idx) + fire + danger.
+    corridor: action (unchanged text, wrapped) + target + danger; the
+    target head is consumed only for turn/attack picks (speculative).
+    """
+    ammo = int(snapshot["player"]["ammo"])
+    danger = {"type": "score",
+              "instructions": {"goal": C.DANGER_GOAL, "rules": C.RULES_COMMON},
+              "criteria": C.QUESTIONS["danger"]["criteria"]}
+    if scenario == "corridor":
+        act = C.CORRIDOR_QUESTIONS["action"]
+        return {
+            "action": {"type": "choice",
+                       "instructions": {
+                           "goal": act["instructions"].format(ammo=ammo),
+                           "rules": C.RULES_COMMON},
+                       "criteria": act["criteria"]},
+            "target": _target_question(snapshot),
+            "danger": danger,
+        }
+    return {
+        "target": _target_question(snapshot),
+        "fire": {"type": "choice",
+                 "instructions": {"goal": C.FIRE_GOAL.format(ammo=ammo),
+                                  "rules": C.RULES_COMMON},
+                 "criteria": C.QUESTIONS["fire"]["criteria"]},
+        "danger": danger,
+    }
 
 
 def decide(client: httpx.Client, snapshot: dict,
            scenario: str = "defend") -> tuple[dict, dict, float]:
     """One system_one call. Returns (answers, usage, latency_ms)."""
-    base = C.CORRIDOR_QUESTIONS if scenario == "corridor" else C.QUESTIONS
-    questions = _format(base, snapshot)
-    body = {"model": C.MODEL, "state": snapshot, "questions": questions}
+    body = {"model": C.MODEL, "state": snapshot,
+            "questions": build_questions(snapshot, scenario)}
     t0 = time.time()
     r = client.post(
         C.API_URL,
@@ -269,38 +357,17 @@ def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
         if conf < C.SWEEP_CONFIDENCE:
             vec, tics, _ = C.CORRIDOR_ACTIONS["advance"]
             return vec, tics, prefix + f"advance (low conf {conf:.2f})"
+        # Speculative target head: for a turn, resolve the hold from the
+        # picked enemy's bearing when it lies on the chosen side.
+        target = picked_target(answers, snapshot)
+        if choice in ("turn_left", "turn_right") and target is not None:
+            b = target["bearing"]
+            if (choice == "turn_left") == (b < 0):
+                tics = _turn_tics_for(b)
+                reason = f"{reason} -> target {target['idx']} b={b}"
         return vec, tics, prefix + reason
     vec, tics, _ = C.CORRIDOR_ACTIONS["advance"]
     return vec, tics, prefix + "advance (fallback)"
-
-
-def _in_sector(bearing: float, sector: str) -> bool:
-    """Mirror encoder.py sector bounds (CENTER_DEGREES edges)."""
-    c = C.CENTER_DEGREES
-    if sector == "left":
-        return -180 <= bearing < -c
-    if sector == "right":
-        return c <= bearing <= 180
-    return -c <= bearing < c
-
-
-def _turn_tics(snapshot: dict, sector: str) -> tuple[int, float | None]:
-    """Bearing-proportional turn hold for the named sector.
-
-    Uses the nearest VISIBLE enemy in that sector; falls back to
-    C.TURN_TICS when none is visible. Returns (tics, bearing_or_None).
-    """
-    cands = [e for e in snapshot.get("enemies", [])
-             if e.get("visible") and _in_sector(e.get("bearing", 999), sector)]
-    if not cands:
-        return C.TURN_TICS, None
-    tgt = min(cands, key=lambda e: e.get("dist", 1 << 30))
-    tics = max(C.TURN_TICS_MIN,
-               round(abs(tgt["bearing"]) / C.TURN_DEG_PER_TIC))
-    # Merger cap: a single hold must never freeze the bot (180 deg would be
-    # ~409 tics ~ 12 game-seconds of standing still). Re-aim next decision.
-    tics = min(tics, C.TURN_TICS_MAX)
-    return tics, tgt["bearing"]
 
 
 def _note_turn(vec: list) -> None:
@@ -312,17 +379,15 @@ def _note_turn(vec: list) -> None:
         _turn_right_n += 1
 
 
-def _chainable_target(snapshot: dict) -> bool:
+def _chainable_target(snapshot: dict, target: dict | None) -> bool:
     """Issue-21: may a chained burst fire at this snapshot?
 
-    Requires a centered+visible enemy at close/mid range. Far-range
-    targets never chain (pistol waste — out of scope to fix for single
-    shots, but bursts must not amplify it).
+    Requires a centered+visible enemy at close/mid range — the picked
+    target when there is one, else any. Far-range never chains.
     """
-    if not snapshot.get("center_visible"):
-        return False
+    pool = [target] if target is not None else snapshot.get("enemies", [])
     near = min(
-        (e["dist"] for e in snapshot.get("enemies", [])
+        (e["dist"] for e in pool
          if e.get("visible") and abs(e.get("bearing", 999)) <= C.CENTER_DEGREES),
         default=None,
     )
@@ -343,10 +408,10 @@ def to_action(answers: dict, snapshot: dict,
         return _corridor_action(answers, snapshot)
     global _fire_streak
     ammo = snapshot["player"]["ammo"]
-    aim = answers["aim"]
+    target = picked_target(answers, snapshot)
     fire_ans = answers.get("fire", {})
     # Issue-16: fire is a relative Choice {shoot, hold} carrying the
-    # numeric rule (|bearing| <= 10 AND visible -> shoot). Fire iff the
+    # numeric rule (side = centered AND visible -> shoot). Fire iff the
     # model picks shoot: no Noul threshold, no center_visible backstop
     # (trusting the model is the experiment). Ammo gate stays.
     # Legacy Noul shape ({"noul": p}) still fires via the old threshold
@@ -369,15 +434,12 @@ def to_action(answers: dict, snapshot: dict,
         reason = f"fire p={fire_p:.2f} (legacy noul)"
     if attack:
         _sense(snapshot)  # keep threat memory fresh even while firing
-        if _chainable_target(snapshot):
+        if _chainable_target(snapshot, target):
             # Issue-21 sustained fire: target is STILL centered+visible at
             # close/mid range, so chain the burst — longer holds on
             # consecutive shoot picks, hard-capped so one hold can never
-            # freeze the bot (BURST_MAX_TICS ~ 1/3 game-second; the next
-            # decision re-extends anyway, so the cap bounds lockup, not
-            # total volume). Under heavy fire (danger high) fire single
-            # bursts only: the next decision must come fast for aim/dodge
-            # corrections, so survival wins over volume.
+            # freeze the bot. Under heavy fire (danger high) fire single
+            # bursts only: the next decision must come fast.
             _fire_streak += 1
             danger = answers.get("danger", {}).get("score", 0.0)
             if danger >= C.BURST_DANGER_HI:
@@ -404,47 +466,24 @@ def to_action(answers: dict, snapshot: dict,
         vec = [1, 0, 0] if _last_seen == "left" else [0, 1, 0]
         _note_turn(vec)
         return vec, C.TURN_TICS, f"face threat {_last_seen} (damage, none visible)"
-
-    # NOTE: no settle-observe after turns (removed): with an explicit numeric
-    # fire rule the bot re-aims immediately instead of pausing.
     _ = after_turn
 
-    if aim["confidence"] >= C.SWEEP_CONFIDENCE:
-        if aim["choice"] == "left":
-            tics, b = _turn_tics(snapshot, "left")
-            if b is None:
-                # Issue-17: blind sweep -> turn toward remembered threat.
-                if _last_seen == "right":
-                    tics2, b2 = _turn_tics(snapshot, "right")
-                    _note_turn([0, 1, 0])
-                    return [0, 1, 0], tics2, (
-                        "aim left blind -> face right (memory)"
-                        if b2 is None else f"aim left blind -> face right b={b2}")
-                _note_turn([1, 0, 0])
-                return [1, 0, 0], tics, "aim left (no visible target)"
-            _note_turn([1, 0, 0])
-            return [1, 0, 0], tics, f"aim left b={b} tics={tics}"
-        if aim["choice"] == "right":
-            tics, b = _turn_tics(snapshot, "right")
-            if b is None:
-                # Issue-17: blind sweep -> turn toward remembered threat.
-                if _last_seen == "left":
-                    tics2, b2 = _turn_tics(snapshot, "left")
-                    _note_turn([1, 0, 0])
-                    return [1, 0, 0], tics2, (
-                        "aim right blind -> face left (memory)"
-                        if b2 is None else f"aim right blind -> face left b={b2}")
-                _note_turn([0, 1, 0])
-                return [0, 1, 0], tics, "aim right (no visible target)"
-            _note_turn([0, 1, 0])
-            return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
-        return [0, 0, 0], C.TURN_TICS, "aim center"
+    # Indexed target (ultrafast-style): Jev picked an enemy by idx; code
+    # resolves the geometry — bearing-proportional turn toward it, 4-tic
+    # cap so the bot re-aims every decision. Off-screen targets carry
+    # bearings too (objects_info), so no blind sweep is needed.
+    if target is not None:
+        b = target["bearing"]
+        if abs(b) <= C.CENTER_DEGREES:
+            return [0, 0, 0], C.TURN_TICS, f"target {target['idx']} centered b={b}"
+        vec = [1, 0, 0] if b < 0 else [0, 1, 0]
+        _note_turn(vec)
+        return vec, _turn_tics_for(b), (
+            f"target {target['idx']} {target['side']} b={b}")
 
-    # low confidence: alternating scan turns instead of freezing
-    # (sweep/hold left the bot standing still while taking fire).
-    # Strict alternation is inherently balanced; still counted for stats.
+    # none / invalid: alternating scan turns instead of freezing.
     global _scan_turn
     _scan_turn = ([0, 1, 0] if _scan_turn == [1, 0, 0] else [1, 0, 0])
     side = "left" if _scan_turn == [1, 0, 0] else "right"
     _note_turn(_scan_turn)
-    return _scan_turn, C.TURN_TICS, f"scan {side} conf={aim['confidence']:.2f}"
+    return _scan_turn, C.TURN_TICS, f"scan {side} (no target)"

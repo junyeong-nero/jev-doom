@@ -15,6 +15,7 @@ import datetime
 import json
 import sys
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -22,8 +23,8 @@ import httpx
 
 from . import config as C
 from .doom_env import make_game
-from .encoder import encode
-from .policy import decide, reset_episode, to_action
+from .encoder import bearing_to, encode
+from .policy import decide, picked_target, reset_episode, to_action
 
 #: Extension pacing: while the next decision is in flight, the last safe
 #: action is held in 2-tic chunks paced at ~real-time Doom speed (35 tics/s),
@@ -84,21 +85,88 @@ def _step(game, action: list, tics: int, frames: list | None,
 
 
 def _extend(game, action: list, frames: list | None, done,
-            cycle_attack: bool) -> None:
+            cycle_attack: bool) -> int:
     """Hold the last safe action until done() is true, ~real-time paced.
 
     Never blocks on the API: each 2-tic chunk re-checks done() and the
     episode state. cycle_attack re-presses semi-auto fire (press/release),
     matching the sequential fire+release cadence while holding.
+    Returns the number of game tics stepped (latency-gap length).
     """
     n = len(action)
     press = ([(action, C.FIRE_TICS), ([0] * n, C.RELEASE_TICS)]
              if cycle_attack else [(action, 2)])
-    i = 0
+    i, stepped = 0, 0
     while not done() and not game.is_episode_finished():
         a, t = press[i % len(press)]
         _step(game, a, t, frames, pace=True)
+        stepped += t
         i += 1
+    return stepped
+
+
+def _track(game, cur: list, frames: list | None, done, target_id,
+           fire_ok: bool) -> int:
+    """Latency-gap tracker (3-button layouts): keep Jev's picked target
+    centered at 4-tic cadence while the next answer is in flight.
+
+    Jev decides WHAT (target + shoot/hold); this only resolves geometry
+    per tic, like ultrafast re-reading element geometry before a click:
+      - centered + visible + fire_ok + ammo -> press/release one shot
+      - off-center -> turn toward it, bearing-proportional, capped 4 tics
+      - centered but not allowed to fire -> hold still
+    No target (none/invalid/dead) -> plain hold of the last action.
+    Returns tics stepped.
+    """
+    if target_id is None:
+        return _extend(game, cur, frames, done, False)
+    n = len(cur)
+    stepped = 0
+    while not done() and not game.is_episode_finished():
+        st = game.get_state()
+        rel = bearing_to(st, list(st.game_variables), target_id) if st else None
+        if rel is None:
+            return stepped + _extend(game, cur, frames, done, False)
+        b, _dist, vis = rel
+        ammo = float(st.game_variables[1])
+        if abs(b) <= C.CENTER_DEGREES:
+            if fire_ok and vis and ammo > 0:
+                _step(game, [0, 0, 1], C.FIRE_TICS, frames, pace=True)
+                _step(game, [0] * n, C.RELEASE_TICS, frames, pace=True)
+                stepped += C.FIRE_TICS + C.RELEASE_TICS
+            else:
+                _step(game, [0] * n, 2, frames, pace=True)
+                stepped += 2
+            continue
+        vec = [1, 0, 0] if b < 0 else [0, 1, 0]
+        tics = min(C.TURN_TICS_MAX,
+                   max(C.TURN_TICS_MIN, round(abs(b) / C.TURN_DEG_PER_TIC)))
+        _step(game, vec, tics, frames, pace=True)
+        stepped += tics
+    return stepped
+
+
+def _lead(gap_tics: float, focus: dict | None, cur: list,
+          scenario: str) -> dict | None:
+    """Latency lead for encode(): what the gap will do to the facing.
+
+    Tracking scenarios steer toward focus (turn = its side, capped at its
+    bearing so the prediction never overshoots); basic/simple strafe, so
+    facing is unchanged. Otherwise the held turn button decides.
+    """
+    tics = round(gap_tics)
+    if tics <= 0:
+        return None
+    if scenario in C.TRACK_SCENARIOS and focus is not None:
+        b = float(focus["bearing"])
+        if scenario != "defend" or abs(b) <= C.CENTER_DEGREES:
+            return {"tics": tics, "turn": 0, "cap_deg": None}
+        return {"tics": tics, "turn": 1 if b > 0 else -1, "cap_deg": abs(b)}
+    if scenario == "corridor":
+        turn = 1 if cur[5] else -1 if cur[4] else 0
+    else:
+        turn = 1 if cur[1] else -1 if cur[0] else 0
+    return {"tics": tics, "turn": turn, "cap_deg": None}
 
 
 #: Heuristic baseline (mirrors tirukovelamanoj/jev-plays-doom rule brain):
@@ -252,6 +320,10 @@ def run_episode(game, client, log, scenario: str = "defend",
     engaged = {}  # object id -> {type, last bearing/dist, engaged count}
     focus = None  # lock record: {id, type, bearing, dist, engaged, misses}
     focus_prev_kills = None  # focus baseline (separate from feedback baseline)
+    recent: deque = deque(maxlen=5)  # history window shown to Jev
+    gap_ema = 0.0  # game tics spent per latency gap (EMA, alpha 0.2)
+    fire_ok = False  # Jev's last fire answer was shoot -> tracker may fire
+    track = scenario in C.TRACK_SCENARIOS
 
     def fresh():
         """Snapshot the live state (+record frame, +focus lock).
@@ -264,7 +336,9 @@ def run_episode(game, client, log, scenario: str = "defend",
             return None
         if frames is not None and state.screen_buffer is not None:
             frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
-        snap = encode(state, list(state.game_variables), last=prev)
+        lead = _lead(gap_ema, focus, cur, scenario)
+        snap = encode(state, list(state.game_variables), last=prev,
+                      recent=list(recent), lead=lead)
         focus = _update_focus(engaged, focus, snap["enemies"],
                               snap["player"]["kills"], focus_prev_kills)
         focus_prev_kills = snap["player"]["kills"]
@@ -280,8 +354,14 @@ def run_episode(game, client, log, scenario: str = "defend",
         fut = ex.submit(decide, client, snapshot, scenario)
         while not game.is_episode_finished():
             if not fut.done():
-                # Slow API -> extend the last safe action, never block.
-                _extend(game, cur, frames, fut.done, cycle)
+                # Slow API -> track the picked target (3-button) or extend
+                # the last safe action (corridor), never block.
+                if track:
+                    gap = _track(game, cur, frames, fut.done,
+                                 (focus or {}).get("id"), fire_ok)
+                else:
+                    gap = _extend(game, cur, frames, fut.done, cycle)
+                gap_ema = gap if gap_ema == 0 else gap_ema + 0.2 * (gap - gap_ema)
                 continue
             try:
                 answers, usage, ms = fut.result()
@@ -298,6 +378,15 @@ def run_episode(game, client, log, scenario: str = "defend",
             focus_id = (snapshot.get("focus") or {}).get("id")
             action, tics, reason = to_action(answers, snapshot, last_turn,
                                             scenario, after_turn=after_turn)
+            tgt = picked_target(answers, snapshot)
+            if tgt is not None:
+                # Focus follows Jev's pick: the tracker and the next
+                # snapshot's focus both mean "the enemy Jev chose".
+                focus = {"id": tgt["id"], "type": tgt["type"],
+                         "bearing": tgt["bearing"], "dist": tgt["dist"],
+                         "engaged": engaged.get(tgt["id"], {}).get("engaged", 0),
+                         "misses": 0}
+            fire_ok = answers.get("fire", {}).get("choice") == "shoot"
             if action[atk_idx]:
                 shots += 1
                 _step(game, action, tics, frames)
@@ -320,6 +409,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                     if decisions > 1 else 0,
                     "kills_change": (snapshot["player"]["kills"] - prev_kills)
                     if decisions > 1 else 0}
+            recent.append(prev)
             prev_hp, prev_ammo, prev_kills = (snapshot["player"]["health"],
                                              snapshot["player"]["ammo"],
                                              snapshot["player"]["kills"])
@@ -328,6 +418,9 @@ def run_episode(game, client, log, scenario: str = "defend",
                 log({
                     "pick": picked,
                     "pick_conf": round(answers["action"]["confidence"], 3),
+                    "target": answers.get("target", {}).get("choice"),
+                    "target_conf": round(answers.get("target", {}).get("confidence", 0.0), 3),
+                    "lead_tics": snapshot.get("lead_tics", 0),
                     "danger": round(answers["danger"]["score"], 2),
                     "action": action, "reason": reason, "ms": round(ms),
                     "in_tok": usage.get("input_tokens", 0),
@@ -343,8 +436,9 @@ def run_episode(game, client, log, scenario: str = "defend",
                 })
             else:
                 log({
-                    "aim": answers["aim"]["choice"],
-                    "aim_conf": round(answers["aim"]["confidence"], 3),
+                    "target": answers.get("target", {}).get("choice"),
+                    "target_conf": round(answers.get("target", {}).get("confidence", 0.0), 3),
+                    "lead_tics": snapshot.get("lead_tics", 0),
                     **_fire_log_fields(answers),
                     "danger": round(answers["danger"]["score"], 2),
                     "action": action, "reason": reason, "ms": round(ms),
@@ -358,6 +452,7 @@ def run_episode(game, client, log, scenario: str = "defend",
             if decisions == 1 or decisions % 10 == 0:
                 if scenario == "corridor":
                     print(f"  d{decisions}: pick={answers['action']['choice']} "
+                          f"target={answers.get('target', {}).get('choice')} "
                           f"danger={answers['danger']['score']:.2f} "
                           f"hp={snapshot['player']['health']:.0f} "
                           f"ammo={snapshot['player']['ammo']:.0f} "
@@ -365,7 +460,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                           f"focus={focus_id} "
                           f"[{reason}, {ms:.0f}ms]", flush=True)
                 else:
-                    print(f"  d{decisions}: aim={answers['aim']['choice']} "
+                    print(f"  d{decisions}: target={answers.get('target', {}).get('choice')} "
                           f"{_fire_str(answers)} "
                           f"danger={answers['danger']['score']:.2f} "
                           f"hp={snapshot['player']['health']:.0f} "

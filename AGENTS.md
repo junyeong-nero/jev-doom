@@ -11,6 +11,7 @@ without breaking it.
 uv sync
 # .env holds JEV_APIKEY=... (or TYPESAFE_API_KEY). NEVER commit it.
 uv run python -m doom.play --scenario defend --brain heuristic --seed 1
+uv run pytest   # offline unit tests (synthetic states, no engine, no API)
 ```
 
 - `uv run` everywhere (uv-managed Python; system Python has broken SSL certs).
@@ -33,11 +34,19 @@ monster), `corridor` = deadly_corridor skill 5 (full movement, 6 shooters).
 - `doom/doom_env.py` — game factory. Scenario table owns buttons, game
   variables, skill, depth flag. **Order matters, see below.**
 - `doom/encoder.py` — `encode(state, game_vars, last, focus)` → snapshot JSON.
-- `doom/policy.py` — `decide()` (one Jev call) + `to_action()` (answers →
-  button vector) + code-side reflexes (dodge, cover, switch, kite, scan).
-- `doom/config.py` — questions, thresholds, action maps, tic constants.
+- `doom/policy.py` — `build_questions()` (request built per snapshot:
+  `target` criteria keyed by enemy `idx`, shared `rules`), `decide()` (one
+  Jev call), `validate_choice()`/`picked_target()` (fail-closed answer
+  checks), `to_action()` (answers → button vector) + code-side reflexes
+  (dodge, cover, switch, kite, scan).
+- `doom/config.py` — rule text (`RULES_COMMON`, `*_GOAL`), static criteria,
+  thresholds, action maps, tic constants.
 - `doom/play.py` — episode loops (async 1-flight Jev loop + sync heuristic
-  loop), logging, seeds, recording.
+  loop), `_track` (latency gap spent re-aiming at the picked target,
+  3-button scenarios) / `_extend` (corridor hold), lead EMA, logging,
+  seeds, recording.
+- `tests/` — offline pytest suite; `conftest.py` has the synthetic
+  state/label/object builders and a `FakeGame`.
 - `doom/compare.py`, `doom/human.py` — scoreboard, keyboard play.
 
 ## Hard-won conventions (read before editing)
@@ -62,6 +71,12 @@ Append only; `ATTACK_IDX` must stay valid everywhere (play, human, policy).
 silent. Turn rate is ~0.44°/tic. Standard cadence is 4 tics/hold everywhere
 (TURN/MOVE/fire-press); sustained-fire bursts cap at 12.
 
+**Vocabulary is fixed.** Enemy `side` ∈ `far_left|left|centered|right|
+far_right` (`encoder.side_of`), and every criterion that mentions a
+bucket must use that exact token (jev-flappy-bird: mismatched words cost
+a lot). `idx` is 1-based after the visible-first/closest sort and the
+`MAX_ENEMIES` cap; `target` criteria keys are `str(idx)` + `none`.
+
 **Threats vs pickups.** Labels carry `object_category` (`Monster` vs
 Armor/Weapon/…): visible non-monsters leave the enemy list. Off-screen
 items fall back to name matching. `MarineChainsawVzd` are REAL attackers
@@ -78,10 +93,15 @@ suite mean/std, never single runs. `basic` ends on kill (short episodes);
 `defend`/`corridor` end on death/timeout. death_penalty is unset, so defend
 reward == kills.
 
-**Async loop.** 1-flight: one `decide()` in a background thread while the
-last safe action holds (2-tic chunks, real-time paced). `cur`/`cycle`
-track the held action; `reset_episode()` must reset ALL module-global
-policy state (focus, dodge side, streaks, counters).
+**Async loop.** 1-flight: one `decide()` in a background thread. While it
+runs, 3-button scenarios `_track` the picked target (turn toward it in
+2–4 tic holds; fire press/release only if the last fire answer was
+`shoot`); corridor `_extend`s the last safe action (2-tic chunks,
+real-time paced). Both return the tics they stepped → `gap_ema` →
+`encode(lead=...)`: the snapshot Jev sees is dead-reckoned that far
+ahead (enemy velocity, player turn). `focus` follows Jev's `target` pick.
+`cur`/`cycle` track the held action; `reset_episode()` must reset ALL
+module-global policy state (focus, dodge side, streaks, counters).
 
 ## Git rules
 
