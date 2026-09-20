@@ -3,6 +3,8 @@
 Usage:
     uv run python -m doom.play --scenario defend --episodes 2
     uv run python -m doom.play --scenario defend --visible   # watch it play
+    uv run python -m doom.play --scenario defend --suite     # fixed seed suite (1..5)
+    uv run python -m doom.play --scenario defend --seed 1    # single seeded run
 """
 import argparse
 import datetime
@@ -16,6 +18,11 @@ from . import config as C
 from .doom_env import make_game
 from .encoder import encode
 from .policy import decide, reset_episode, to_action
+
+# Fixed seed suite for comparable evaluation (issue #6). Same seeds +
+# same code => same spawn trajectory; Jev answers may still vary
+# (server-side sampling), so report mean/std, not single runs.
+SEED_SUITE = [1, 2, 3, 4, 5]
 
 
 def _step(game, action: list, tics: int, frames: list | None) -> None:
@@ -94,11 +101,14 @@ def _update_focus(engaged: dict, focus: dict | None, enemies: list,
 
 
 def run_episode(game, client, log, scenario: str = "defend",
-                frames: list | None = None) -> dict:
+                frames: list | None = None, seed: int | None = None) -> dict:
+    if seed is not None:
+        game.set_seed(seed)
     game.new_episode()
     reset_episode()
     decisions, latencies, shots = 0, [], 0
     last_turn = None
+    after_turn = False  # previous action was a turn -> observe once
     prev = None  # feedback for the next snapshot
     engaged = {}  # object id -> {type, last bearing/dist, engaged count}
     focus = None  # lock record: {id, type, bearing, dist, engaged, misses}
@@ -124,7 +134,8 @@ def run_episode(game, client, log, scenario: str = "defend",
             game.make_action([0] * len(game.get_available_buttons()),
                              C.TURN_TICS)
             continue
-        action, tics, reason = to_action(answers, snapshot, last_turn, scenario)
+        action, tics, reason = to_action(answers, snapshot, last_turn,
+                                         scenario, after_turn=after_turn)
         if action[atk_idx]:
             shots += 1
             _step(game, action, tics, frames)
@@ -134,6 +145,7 @@ def run_episode(game, client, log, scenario: str = "defend",
             _step(game, action, tics, frames)
         if action in ([1, 0, 0], [0, 1, 0]):
             last_turn = action
+        after_turn = action in ([1, 0, 0], [0, 1, 0])
         decisions += 1
         latencies.append(ms)
         # Feedback for the next decision: what the last pick cost/gained.
@@ -211,6 +223,12 @@ def main() -> None:
     ap.add_argument("--timeout", type=int, default=2100)
     ap.add_argument("--record", action="store_true",
                     help="save screen frames to runs/<ts>_frames.npz")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="vizdoom RNG seed (set before new_episode). "
+                         "With --episodes N, episode ep uses seed+N.")
+    ap.add_argument("--suite", action="store_true",
+                    help=f"run the fixed seed suite {SEED_SUITE} "
+                         "(overrides --episodes/--seed)")
     args = ap.parse_args()
 
     if not C.API_KEY:
@@ -221,20 +239,28 @@ def main() -> None:
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     game = make_game(args.scenario, visible=args.visible, timeout_tics=args.timeout)
+    if args.suite:
+        seeds: list = list(SEED_SUITE)
+    elif args.seed is not None:
+        seeds = [args.seed + ep for ep in range(args.episodes)]
+    else:
+        seeds = [None] * args.episodes
     summaries = []
     try:
         with httpx.Client(timeout=25) as client:
-            for ep in range(args.episodes):
-                path = run_dir / f"{ts}_{args.scenario}_ep{ep}.jsonl"
-                print(f"episode {ep} -> {path}", flush=True)
+            for ep, seed in enumerate(seeds):
+                suffix = f"_seed{seed}" if seed is not None else ""
+                path = run_dir / f"{ts}_{args.scenario}_ep{ep}{suffix}.jsonl"
+                print(f"episode {ep} (seed={seed}) -> {path}", flush=True)
                 frames = [] if args.record else None
                 with open(path, "w") as f:
                     def log(obj, f=f):
                         f.write(json.dumps(obj) + "\n")
-                    s = run_episode(game, client, log, args.scenario, frames)
+                    s = run_episode(game, client, log, args.scenario, frames,
+                                    seed=seed)
                 if frames:
                     import numpy as np
-                    fpath = run_dir / f"{ts}_{args.scenario}_ep{ep}_frames.npz"
+                    fpath = run_dir / f"{ts}_{args.scenario}_ep{ep}{suffix}_frames.npz"
                     np.savez_compressed(fpath, frames=np.stack(frames))
                     print(f"saved {len(frames)} frames -> {fpath}", flush=True)
                 import vizdoom as vzd
@@ -243,6 +269,7 @@ def main() -> None:
                     "hp": float(game.get_game_variable(vzd.GameVariable.HEALTH)),
                     "ammo": float(game.get_game_variable(vzd.GameVariable.AMMO2)),
                     "kills": int(game.get_game_variable(vzd.GameVariable.KILLCOUNT)),
+                    "seed": seed,
                 })
                 summaries.append(s)
                 print(f"episode {ep} done: {s}", flush=True)
