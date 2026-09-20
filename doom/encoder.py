@@ -41,15 +41,56 @@ def _norm180(deg: float) -> float:
     return deg
 
 
-def _rel(px: float, py: float, angle: float, o) -> tuple[float, float]:
-    """Bearing (deg, right-positive) + distance from player to object."""
-    dx = float(o.position_x) - px
-    dy = float(o.position_y) - py
+def _rel(px: float, py: float, angle: float, o,
+         tics: float = 0.0) -> tuple[float, float]:
+    """Bearing (deg, right-positive) + distance from player to object.
+
+    tics > 0 dead-reckons the object along its velocity first (latency lead).
+    """
+    dx = float(o.position_x) + float(o.velocity_x) * tics - px
+    dy = float(o.position_y) + float(o.velocity_y) * tics - py
     dist = math.hypot(dx, dy) or 1.0
     abs_deg = math.degrees(math.atan2(dy, dx))
     # Doom: facing +X at angle 0, right hand points -Y, so screen-right
     # is negative atan2 direction -> bearing = angle - abs (right positive)
     return _norm180(angle - abs_deg), dist
+
+
+def _player(state) -> tuple[float, float]:
+    for o in state.objects or []:
+        if o.name == "DoomPlayer":
+            return float(o.position_x), float(o.position_y)
+    return 0.0, 0.0
+
+
+def bearing_to(state, game_vars, object_id: int):
+    """(bearing, dist, visible) of a live object, or None when absent.
+
+    Cheap per-tic read for the latency-gap tracker: no snapshot build.
+    """
+    angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
+    px, py = _player(state)
+    for o in state.objects or []:
+        if o.id == object_id and o.name != "DoomPlayer":
+            b, d = _rel(px, py, angle, o)
+            vis = any(lb.object_id == object_id for lb in (state.labels or []))
+            return round(b, 1), d, vis
+    return None
+
+
+def _lead_angle(angle: float, lead: dict | None) -> float:
+    """Predicted facing when the answer lands (Flappy-style latency lead).
+
+    turn=+1 is TURN_RIGHT, which LOWERS Doom's angle (bearing = angle - abs).
+    cap_deg bounds the sweep (the tracker stops turning once centered).
+    """
+    if not lead or not lead.get("turn"):
+        return angle
+    delta = C.TURN_DEG_PER_TIC * float(lead["tics"])
+    cap = lead.get("cap_deg")
+    if cap is not None:
+        delta = min(delta, float(cap))
+    return angle - delta * (1 if lead["turn"] > 0 else -1)
 
 
 def _pickup_kind(o, categories: dict) -> str | None:
@@ -80,7 +121,8 @@ def side_of(bearing: float) -> str:
 
 
 def encode(state, game_vars, last: dict | None = None,
-           focus: dict | None = None) -> dict:
+           focus: dict | None = None, recent: list | None = None,
+           lead: dict | None = None) -> dict:
     """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?,
     hits_taken?, damage?, selected_weapon?, selected_weapon_ammo?,
     shotgun_owned?, shells?].
@@ -92,9 +134,18 @@ def encode(state, game_vars, last: dict | None = None,
     focus: current engagement-lock target
     {"id": int, "type": str, "bearing": float, "engaged": int}
     (last-seen bearing while the target is off-screen). None when no lock.
+
+    recent: up to 5 previous feedback dicts, oldest first (history window).
+
+    lead: {"tics", "turn", "cap_deg"} — predict the state this many game
+    tics ahead: enemies move along their velocity, the player's facing
+    advances by TURN_DEG_PER_TIC*tics in the turn direction (+1 right,
+    -1 left, 0 none), capped at cap_deg. None = raw current state.
     """
     health, ammo, kills = (float(game_vars[i]) for i in range(3))
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
+    lead_tics = float(lead["tics"]) if lead else 0.0
+    angle = _lead_angle(angle, lead)
     # Issue-3: appended by doom_env (HITS_TAKEN, DAMAGECOUNT). Length-guarded
     # so older recordings / builds without them still decode.
     hits_taken = float(game_vars[4]) if len(game_vars) > 4 else None
@@ -106,11 +157,7 @@ def encode(state, game_vars, last: dict | None = None,
     shotgun_owned = bool(game_vars[8]) if len(game_vars) > 8 else False
     shells = int(game_vars[9]) if len(game_vars) > 9 else 0
 
-    px, py = 0.0, 0.0
-    for o in state.objects or []:
-        if o.name == "DoomPlayer":
-            px, py = float(o.position_x), float(o.position_y)
-            break
+    px, py = _player(state)
 
     enemies = []
     pickups: dict[str, list] = {k: [] for k in PICKUP_KINDS}
@@ -135,7 +182,7 @@ def encode(state, game_vars, last: dict | None = None,
         if o.name in IGNORE:
             continue
         kind = _pickup_kind(o, categories)
-        bearing, dist = _rel(px, py, angle, o)
+        bearing, dist = _rel(px, py, angle, o, lead_tics)
         if kind is not None:
             pickups[kind].append({
                 "kind": kind,
@@ -146,8 +193,8 @@ def encode(state, game_vars, last: dict | None = None,
             })
             continue
         # Radial velocity: negative = closing in on the player.
-        dx = float(o.position_x) - px
-        dy = float(o.position_y) - py
+        dx = float(o.position_x) + float(o.velocity_x) * lead_tics - px
+        dy = float(o.position_y) + float(o.velocity_y) * lead_tics - py
         vx, vy = float(o.velocity_x), float(o.velocity_y)
         closing = (vx * dx + vy * dy) / dist < -1.0
         # Screen-x centering error (pixels, + = right of center) from the
@@ -218,6 +265,10 @@ def encode(state, game_vars, last: dict | None = None,
         snap["player"]["damage"] = int(damage)
     if last is not None:
         snap["last"] = last
+    if recent:
+        snap["recent"] = list(recent)
+    if lead:
+        snap["lead_tics"] = int(lead["tics"])
 
     # Corridor maps: per-sector wall proximity from the depth buffer.
     # "wall" = blocked that way, "open" = free path. Robust median
