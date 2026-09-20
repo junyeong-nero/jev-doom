@@ -29,12 +29,17 @@ def _bucket(dist: float) -> str:
     return "far"
 
 
-def encode(state, game_vars, last: dict | None = None) -> dict:
+def encode(state, game_vars, last: dict | None = None,
+           focus: dict | None = None) -> dict:
     """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?].
 
     last: feedback from the previous decision
     {"action": str, "hp_change": float, "ammo_used": float, "kills_change": int}
     so Jev can see the consequences of its last pick.
+
+    focus: current engagement-lock target
+    {"id": int, "type": str, "bearing": float, "engaged": int}
+    (last-seen bearing while the target is off-screen). None when no lock.
     """
     health, ammo, kills = (float(game_vars[i]) for i in range(3))
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
@@ -53,6 +58,15 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
     visible_ids = {label.object_id for label in (state.labels or [])}
     categories = {label.object_id: getattr(label, "object_category", "")
                   for label in (state.labels or [])}
+    labels_by_id = {label.object_id: label for label in (state.labels or [])}
+    # Screen width for the label x-error: derive from the frame when
+    # available (320 wide -> center 160px), else assume 320.
+    screen_w = 320
+    sb = getattr(state, "screen_buffer", None)
+    if sb is not None and getattr(sb, "ndim", 0) == 3:
+        screen_w = int(sb.shape[2] if sb.shape[0] <= 4 else sb.shape[1])
+    elif sb is not None and getattr(sb, "ndim", 0) == 2:
+        screen_w = int(sb.shape[1])
     # Skip non-threats: the player, impact effects, and VISIBLE pickups
     # (labels carry clean categories: Monster vs Armor/Weapon/...).
     # Off-screen pickups can't be categorized; they only add turn bias.
@@ -72,13 +86,21 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         # Radial velocity: negative = closing in on the player.
         vx, vy = float(o.velocity_x), float(o.velocity_y)
         closing = (vx * dx + vy * dy) / dist < -1.0
+        # Screen-x centering error (pixels, + = right of center) from the
+        # label box, so Jev can micro-adjust. Off-screen: None.
+        x_err = None
+        lb = labels_by_id.get(o.id)
+        if o.id in visible_ids and lb is not None:
+            x_err = round(float(lb.x) + float(lb.width) / 2 - screen_w / 2)
         enemies.append({
+            "id": o.id,
             "type": o.name,
             "bearing": round(bearing, 1),
             "dist": round(dist),
             "range": _bucket(dist),
             "visible": o.id in visible_ids,
             "closing": closing,
+            "x_err": x_err,
         })
 
     # Most threatening first: visible, then closest. Cap for token budget.
@@ -111,6 +133,7 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         "enemies": enemies,
         "sectors": sectors,
         "center_visible": center_visible,
+        "focus": focus,  # engagement lock (None when no target held)
     }
     if hits_taken is not None:
         snap["player"]["hits_taken"] = int(hits_taken)

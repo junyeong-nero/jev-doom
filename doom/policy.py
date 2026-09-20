@@ -210,12 +210,44 @@ def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
     return vec, tics, prefix + "advance (fallback)"
 
 
+def _in_sector(bearing: float, sector: str) -> bool:
+    """Mirror encoder.py sector bounds (CENTER_DEGREES edges)."""
+    c = C.CENTER_DEGREES
+    if sector == "left":
+        return -180 <= bearing < -c
+    if sector == "right":
+        return c <= bearing <= 180
+    return -c <= bearing < c
+
+
+def _turn_tics(snapshot: dict, sector: str) -> tuple[int, float | None]:
+    """Bearing-proportional turn hold for the named sector.
+
+    Uses the nearest VISIBLE enemy in that sector; falls back to
+    C.TURN_TICS when none is visible. Returns (tics, bearing_or_None).
+    """
+    cands = [e for e in snapshot.get("enemies", [])
+             if e.get("visible") and _in_sector(e.get("bearing", 999), sector)]
+    if not cands:
+        return C.TURN_TICS, None
+    tgt = min(cands, key=lambda e: e.get("dist", 1 << 30))
+    tics = max(C.TURN_TICS_MIN,
+               round(abs(tgt["bearing"]) / C.TURN_DEG_PER_TIC))
+    # Merger cap: a single hold must never freeze the bot (180 deg would be
+    # ~409 tics ~ 12 game-seconds of standing still). Re-aim next decision.
+    tics = min(tics, C.TURN_TICS_MAX)
+    return tics, tgt["bearing"]
+
+
 def to_action(answers: dict, snapshot: dict,
               last_turn: list | None = None,
-              scenario: str = "defend") -> tuple[list, int, str]:
+              scenario: str = "defend",
+              after_turn: bool = False) -> tuple[list, int, str]:
     """Map answers to ([left, right, attack], hold_tics, reason).
 
     last_turn: previous turn vector ([1,0,0] or [0,1,0]) for sweep hysteresis.
+    after_turn: previous action was a turn -> one observation decision
+        (anti-overshoot) before turning again.
     """
     if scenario == "corridor":
         return _corridor_action(answers, snapshot)
@@ -234,18 +266,30 @@ def to_action(answers: dict, snapshot: dict,
         return [0, 0, 1], C.FIRE_TICS, f"fire p={fire_p:.2f}"
 
     # Issue-3: hit from off-screen with no strafe buttons here -> turn to
-    # face the most recently visible threat sector.
+    # face the most recently visible threat sector. Takes precedence over
+    # the settle-observe: damage is urgent, patience is not.
     took_damage, _ = _sense(snapshot)
     if (took_damage and not snapshot["center_visible"]
             and _last_seen in ("left", "right")):
         vec = [1, 0, 0] if _last_seen == "left" else [0, 1, 0]
         return vec, C.TURN_TICS, f"face threat {_last_seen} (damage, none visible)"
 
+    if after_turn:
+        # One settling observation after a turn (anti-overshoot); the next
+        # decision re-aims from a fresh snapshot.
+        return [0, 0, 0], C.OBSERVE_TICS, "observe after turn"
+
     if aim["confidence"] >= C.SWEEP_CONFIDENCE:
         if aim["choice"] == "left":
-            return [1, 0, 0], C.TURN_TICS, "aim left"
+            tics, b = _turn_tics(snapshot, "left")
+            if b is None:
+                return [1, 0, 0], tics, "aim left (no visible target)"
+            return [1, 0, 0], tics, f"aim left b={b} tics={tics}"
         if aim["choice"] == "right":
-            return [0, 1, 0], C.TURN_TICS, "aim right"
+            tics, b = _turn_tics(snapshot, "right")
+            if b is None:
+                return [0, 1, 0], tics, "aim right (no visible target)"
+            return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
         return [0, 0, 0], C.TURN_TICS, "aim center"
 
     # low confidence: keep sweeping instead of jittering
