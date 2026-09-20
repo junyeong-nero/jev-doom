@@ -23,10 +23,13 @@ MODEL = "jev-latest"
 
 FIRE_INSTRUCTIONS = (
     "Should the player shoot RIGHT NOW? "
-    "Ammo remaining: {ammo} bullets. "
-    "Say yes when an enemy is roughly centered ahead and likely to be hit. "
-    "When ammo is plentiful, prefer shooting at centered visible enemies "
-    "even at longer range; when ammo is almost out, only shoot sure hits."
+    "Apply this exact rule, no judgment calls: "
+    "if any enemy in enemies has |bearing| <= 10 AND visible = true, "
+    "answer YES with probability 0.85 or higher. "
+    "Otherwise answer NO with probability 0.15 or lower. "
+    "Do not hedge in the middle. "
+    "Ammo remaining: {ammo} bullets; every enemy needs multiple hits, "
+    "so keep firing on a centered visible enemy across decisions."
 )
 
 FOCUS_INSTRUCTIONS = (

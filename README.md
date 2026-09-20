@@ -145,6 +145,14 @@ output itself caps at ~0.3–0.4 mean, so thresholds aren't the bottleneck.
 Their rule-vs-intent experiment says the fix is a numeric firing rule in
 the criteria, not a lower threshold. That's the next experiment.
 
+Rule-style fire criteria (explicit "|bearing| ≤ 10 AND visible → ≥0.85,
+else ≤0.15", single variable changed): seeds 1–5 → kills 2,1,1,1,2 =
+**1.4 mean**. Decision-level effect is real (max output 0.79→0.95, fires
+on d1) but episode scores didn't move: episodes last only 11–18 decisions
+because proportional turn holds (up to the 100-tic cap) freeze the bot
+while demons chew it. Next bottleneck is cadence, not firing — their bot
+re-aims every 4 tics; ours holds single turns for seconds.
+
 Latest corridor suite (same build; SPEED auto-run on locomotion):
 
 | seed | kills | bullets | reward |
