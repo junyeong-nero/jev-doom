@@ -56,6 +56,20 @@ doom/
 
 가격 출처: TypeSafe 블로그(Jev), OpenAI/Anthropic 공개 요금 (2026-09 기준).
 
+## 인간 vs Jev 기록 대결
+
+같은 맵·같은 룰로 번갈아 플레이하고 기록을 비교한다.
+
+```sh
+uv run python -m doom.human --scenario defend   # ←/→(또는 A/D) + 스페이스, ESC 종료
+uv run python -m doom.compare                   # 기록표 출력
+```
+
+점수표는 kills(처치) / bullets(소모탄) / acc(발당 처치율).
+추천 맵은 **defend_the_center** (적이 다가와서 교전이 성립).
+basic/simple은 적이 멀리 머물면 권총 산탄 때문에 50발로도 0킬 타임아웃이
+뜰 수 있음 — 봇·인간 공통. 탄약 아끼는 게 실력임.
+
 ## 알려진 것들
 
 - pistol은 세미오토: 발사 후 release 틱 필요 (`RELEASE_TICS`)

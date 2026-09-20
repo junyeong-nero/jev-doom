@@ -120,6 +120,9 @@ def main() -> None:
                 })
                 summaries.append(s)
                 print(f"episode {ep} done: {s}", flush=True)
+                with open(str(path).replace(".jsonl", ".summary.json"), "w") as f:
+                    json.dump({**s, "scenario": args.scenario,
+                               "path": str(path)}, f, indent=1)
     finally:
         game.close()
 
