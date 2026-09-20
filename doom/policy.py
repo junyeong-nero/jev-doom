@@ -99,7 +99,7 @@ def reset_episode() -> None:
     global _corridor_decisions, _last_seen, _prev_hits
     global _cover_active, _cover_visible_before, _cover_ttl
     global _turn_left_n, _turn_right_n
-    global _scan_turn, _fire_streak
+    global _scan_turn, _fire_streak, _dodge_side
     _corridor_decisions = 0
     _last_seen = None
     _prev_hits = None
@@ -110,6 +110,7 @@ def reset_episode() -> None:
     _turn_right_n = 0
     _scan_turn = [0, 1, 0]
     _fire_streak = 0
+    _dodge_side = "strafe_left"
 
 
 def _visible_count(snapshot: dict) -> int:
