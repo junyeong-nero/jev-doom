@@ -119,8 +119,15 @@ CORRIDOR_QUESTIONS = {
             "are IN a kill-zone: pick advance and run out of it, do not "
             "trade fire from a standstill. If last.hp_change is dropping "
             "fast, you are standing in fire: strafe sideways (keeps your "
-            "aim) or advance out of it. Retreat is a dead-end wall, never "
-            "retreat twice in a row. "
+            "aim) or advance out of it. MOVEMENT: every advance, retreat "
+            "and strafe step auto-runs at full SPEED (free speed, no "
+            "stamina) — strafing dodges while keeping your aim. "
+            "Retreat is a single kiting step back, not an escape: allowed "
+            "when a close threat is straight ahead "
+            "(sectors.center.nearest is close, e.g. a Demon closing in) "
+            "so you can shoot it while it closes the gap. Never retreat "
+            "during the opening push (the spawn wall is directly behind "
+            "you), and never twice in a row (backing blind into walls). "
             "COVER: path shows walls per sector and I sidestep toward a "
             "wall sector on my own when hit with nothing visible ahead, "
             "so help me: if you see path.left or path.right is wall, "
@@ -154,7 +161,8 @@ CORRIDOR_QUESTIONS = {
         ),
         "criteria": {
             "advance": "Sprint forward: path center open, no close threat",
-            "retreat": "EMERGENCY only: one step back from a point-blank threat",
+            "retreat": "Kiting step back: close threat straight ahead, "
+                       "single step only (never in the opening push)",
             "strafe_left": "Sidestep left under fire, circle toward a left threat, or hug left wall cover",
             "strafe_right": "Sidestep right under fire, circle toward a right threat, or hug right wall cover",
             "turn_left": "Threat is far left: rotate to face it",
@@ -177,19 +185,21 @@ CORRIDOR_QUESTIONS = {
 }
 
 # corridor choice -> (button vector, hold tics); buttons =
-# [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK, SELECT_WEAPON3]
-# (SELECT_WEAPON3 appended at END: ATTACK stays index 6).
+# [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK, SELECT_WEAPON3, SPEED].
+# Locomotion (advance/retreat/strafe, incl. firing strafes) always holds
+# SPEED: Doom has no stamina, it's free speed — no Jev decision needed.
+# (SELECT_WEAPON3 at index 7 keeps ATTACK at index 6.)
 CORRIDOR_ACTIONS = {
-    "advance": ([1, 0, 0, 0, 0, 0, 0, 0], MOVE_TICS, "advance"),
-    "retreat": ([0, 1, 0, 0, 0, 0, 0, 0], MOVE_TICS, "retreat"),
-    "strafe_left": ([0, 0, 1, 0, 0, 0, 0, 0], MOVE_TICS, "strafe left"),
-    "strafe_right": ([0, 0, 0, 1, 0, 0, 0, 0], MOVE_TICS, "strafe right"),
-    "turn_left": ([0, 0, 0, 0, 1, 0, 0, 0], TURN_TICS, "turn left"),
-    "turn_right": ([0, 0, 0, 0, 0, 1, 0, 0], TURN_TICS, "turn right"),
-    "attack": ([0, 0, 0, 0, 0, 0, 1, 0], 8, "fire"),  # 8-tic burst: ~2 bullets via auto-refire
-    "strafe_left_fire": ([0, 0, 1, 0, 0, 0, 1, 0], 8, "strafe left + fire"),
-    "strafe_right_fire": ([0, 0, 0, 1, 0, 0, 1, 0], 8, "strafe right + fire"),
-    "switch_to_shotgun": ([0, 0, 0, 0, 0, 0, 0, 1], SWITCH_TICS,
+    "advance": ([1, 0, 0, 0, 0, 0, 0, 0, 1], MOVE_TICS, "advance"),
+    "retreat": ([0, 1, 0, 0, 0, 0, 0, 0, 1], MOVE_TICS, "retreat"),
+    "strafe_left": ([0, 0, 1, 0, 0, 0, 0, 0, 1], MOVE_TICS, "strafe left"),
+    "strafe_right": ([0, 0, 0, 1, 0, 0, 0, 0, 1], MOVE_TICS, "strafe right"),
+    "turn_left": ([0, 0, 0, 0, 1, 0, 0, 0, 0], TURN_TICS, "turn left"),
+    "turn_right": ([0, 0, 0, 0, 0, 1, 0, 0, 0], TURN_TICS, "turn right"),
+    "attack": ([0, 0, 0, 0, 0, 0, 1, 0, 0], 8, "fire"),  # 8-tic burst: ~2 bullets via auto-refire
+    "strafe_left_fire": ([0, 0, 1, 0, 0, 0, 1, 0, 1], 8, "strafe left + fire"),
+    "strafe_right_fire": ([0, 0, 0, 1, 0, 0, 1, 0, 1], 8, "strafe right + fire"),
+    "switch_to_shotgun": ([0, 0, 0, 0, 0, 0, 0, 1, 0], SWITCH_TICS,
                           "switch to shotgun"),
 }
 

@@ -38,6 +38,32 @@ def decide(client: httpx.Client, snapshot: dict,
 _dodge_side = "strafe_left"
 _corridor_decisions = 0
 
+
+def _close_threat_ahead(snapshot: dict) -> bool:
+    """A close-range threat straight ahead (kiting target)?"""
+    center = (snapshot.get("sectors") or {}).get("center") or {}
+    if center.get("nearest") == "close":
+        return True
+    return any(
+        e.get("range") == "close"
+        and abs(e.get("bearing", 999)) <= C.CENTER_DEGREES
+        for e in snapshot.get("enemies", []))
+
+
+def _kite_ok(snapshot: dict) -> bool:
+    """Kiting retreat allowed: close threat straight ahead, single step.
+
+    "Behind open" proxy: the opening sprint already cleared the spawn
+    wall, and the last action wasn't a retreat (never back up twice in
+    a row — walls close in behind, and the depth-buffer path feature
+    only sees forward).
+    """
+    last = (snapshot.get("last") or {}).get("action")
+    if last == "retreat":
+        return False
+    return _close_threat_ahead(snapshot)
+
+
 #: Issue-3 threat memory: sector ("left"/"center"/"right") that most
 #: recently held a visible enemy. Updated every decision from the snapshot.
 _last_seen: str | None = None
@@ -201,8 +227,17 @@ def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
         vec, tics, reason = C.CORRIDOR_ACTIONS[choice]
         return vec, tics, prefix + reason
 
+    # Kiting retreat: single step back from a close frontal threat.
+    # Otherwise (no kite target, or would back into a wall twice in a
+    # row) sidestep instead — keeps aim on the threat while moving.
+    if choice == "retreat" and not _kite_ok(snapshot):
+        _dodge_side = ("strafe_right"
+                       if _dodge_side == "strafe_left" else "strafe_left")
+        vec, tics, _ = C.CORRIDOR_ACTIONS[_dodge_side]
+        return vec, tics, f"sidestep (retreat blocked@{danger:.1f})"
+
     # Survival reflex: under heavy fire, don't stand still.
-    if danger >= C.DODGE_DANGER and choice in ("advance", "retreat"):
+    if danger >= C.DODGE_DANGER and choice == "advance":
         _dodge_side = ("strafe_right"
                        if _dodge_side == "strafe_left" else "strafe_left")
         vec, tics, _ = C.CORRIDOR_ACTIONS[_dodge_side]

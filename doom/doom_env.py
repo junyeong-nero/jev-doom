@@ -61,6 +61,7 @@ SCENARIOS = {
             # (slot 2 is the starting pistol); ChaingunGuys/ShotgunGuys
             # drop their guns on death, so this gets used mid-episode.
             vzd.Button.SELECT_WEAPON3,
+            vzd.Button.SPEED,  # free run speed, no stamina (issue #5)
         ],
         # Weapon vars AFTER the damage counters ([6..9]) so encoder
         # indexes [4],[5] keep reading HITS_TAKEN/DAMAGECOUNT (issue #3).
