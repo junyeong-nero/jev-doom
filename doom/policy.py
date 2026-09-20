@@ -1,4 +1,5 @@
 """Jev policy: snapshot -> answers -> button vector."""
+import math
 import time
 
 import httpx
@@ -6,24 +7,92 @@ import httpx
 from . import config as C
 
 
-def _format(questions: dict, snapshot: dict) -> dict:
-    """Fill {ammo} placeholders in question instructions."""
-    out = {}
-    for k, q in questions.items():
-        q = dict(q)
-        if "{ammo}" in q.get("instructions", ""):
-            q["instructions"] = q["instructions"].format(
-                ammo=int(snapshot["player"]["ammo"]))
-        out[k] = q
-    return out
+def target_ids(snapshot: dict) -> list[str]:
+    """Choice keys for the dynamic target question (enemy idx + none)."""
+    return [str(e["idx"]) for e in snapshot.get("enemies", [])] + ["none"]
+
+
+def validate_choice(answer, ids: list[str]):
+    """ultrafast-style fail-closed check: the answer when it is a
+    well-formed Choice over exactly `ids`, else None. Never raises.
+
+    probabilities are optional (older shapes), but when present they must
+    cover ids exactly, be finite in [0,1], sum to ~1 and agree with choice.
+    """
+    try:
+        choice = answer["choice"]
+        conf = answer["confidence"]
+        if choice not in ids or not isinstance(conf, (int, float)):
+            return None
+        if not math.isfinite(conf) or not 0 <= conf <= 1:
+            return None
+        probs = answer.get("probabilities")
+        if probs is not None:
+            if set(probs) != set(ids):
+                return None
+            vals = list(probs.values())
+            if not all(isinstance(v, (int, float)) and math.isfinite(v)
+                       and 0 <= v <= 1 for v in vals):
+                return None
+            if abs(sum(vals) - 1) >= 0.02:
+                return None
+            if probs[choice] < max(vals) - 1e-6:
+                return None
+        return answer
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _target_question(snapshot: dict) -> dict:
+    criteria = {
+        str(e["idx"]): {"type": e["type"], "side": e["side"],
+                        "range": e["range"], "visible": e["visible"],
+                        "closing": e["closing"]}
+        for e in snapshot.get("enemies", [])
+    }
+    criteria["none"] = "No enemy listed / nothing worth engaging"
+    return {"type": "choice",
+            "instructions": {"goal": C.TARGET_GOAL, "rules": C.RULES_COMMON},
+            "criteria": criteria}
+
+
+def build_questions(snapshot: dict, scenario: str) -> dict:
+    """Questions for ONE request, built per snapshot (indexed action space).
+
+    defend-family: target (dynamic, keyed by enemy idx) + fire + danger.
+    corridor: action (unchanged text, wrapped) + target + danger; the
+    target head is consumed only for turn/attack picks (speculative).
+    """
+    ammo = int(snapshot["player"]["ammo"])
+    danger = {"type": "score",
+              "instructions": {"goal": C.DANGER_GOAL, "rules": C.RULES_COMMON},
+              "criteria": C.QUESTIONS["danger"]["criteria"]}
+    if scenario == "corridor":
+        act = C.CORRIDOR_QUESTIONS["action"]
+        return {
+            "action": {"type": "choice",
+                       "instructions": {
+                           "goal": act["instructions"].format(ammo=ammo),
+                           "rules": C.RULES_COMMON},
+                       "criteria": act["criteria"]},
+            "target": _target_question(snapshot),
+            "danger": danger,
+        }
+    return {
+        "target": _target_question(snapshot),
+        "fire": {"type": "choice",
+                 "instructions": {"goal": C.FIRE_GOAL.format(ammo=ammo),
+                                  "rules": C.RULES_COMMON},
+                 "criteria": C.QUESTIONS["fire"]["criteria"]},
+        "danger": danger,
+    }
 
 
 def decide(client: httpx.Client, snapshot: dict,
            scenario: str = "defend") -> tuple[dict, dict, float]:
     """One system_one call. Returns (answers, usage, latency_ms)."""
-    base = C.CORRIDOR_QUESTIONS if scenario == "corridor" else C.QUESTIONS
-    questions = _format(base, snapshot)
-    body = {"model": C.MODEL, "state": snapshot, "questions": questions}
+    body = {"model": C.MODEL, "state": snapshot,
+            "questions": build_questions(snapshot, scenario)}
     t0 = time.time()
     r = client.post(
         C.API_URL,
