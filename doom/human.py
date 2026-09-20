@@ -22,14 +22,21 @@ from .doom_env import make_game
 LOG_EVERY_TICS = 7
 
 
-def read_action(keys) -> list:
+def read_action(keys, scenario: str = "defend") -> list:
+    if scenario == "corridor":
+        # [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK]
+        return [int(bool(keys[pygame.K_w])), int(bool(keys[pygame.K_s])),
+                int(bool(keys[pygame.K_a])), int(bool(keys[pygame.K_d])),
+                int(bool(keys[pygame.K_LEFT])), int(bool(keys[pygame.K_RIGHT])),
+                int(bool(keys[pygame.K_SPACE]))]
     left = keys[pygame.K_LEFT] or keys[pygame.K_a]
     right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
     fire = keys[pygame.K_SPACE]
     return [int(bool(left)), int(bool(right)), int(bool(fire))]
 
 
-def run_human_episode(game, log, scale: int = 2) -> dict:
+def run_human_episode(game, log, scenario: str = "defend",
+                      scale: int = 2) -> dict:
     game.new_episode()
     sw, sh = 320, 240
     screen = pygame.display.set_mode((sw * scale, sh * scale))
@@ -46,7 +53,7 @@ def run_human_episode(game, log, scale: int = 2) -> dict:
         if keys[pygame.K_ESCAPE]:
             return {"quit": True, "tic": tic, "shots": shots}
 
-        action = read_action(keys)
+        action = read_action(keys, scenario)
         state = game.get_state()
         if state is None:
             break
@@ -84,7 +91,7 @@ def run_human_episode(game, log, scale: int = 2) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="defend",
-                    choices=["defend", "basic", "simple"])
+                    choices=["defend", "basic", "simple", "corridor"])
     ap.add_argument("--episodes", type=int, default=1)
     ap.add_argument("--timeout", type=int, default=2100)
     args = ap.parse_args()
@@ -98,11 +105,12 @@ def main() -> None:
     try:
         for ep in range(args.episodes):
             path = run_dir / f"{ts}_human_{args.scenario}_ep{ep}.jsonl"
-            print(f"episode {ep}: play! (arrows + space, ESC quits)", flush=True)
+            print(f"episode {ep}: play! (corridor: WASD + arrows + space | "
+          f"others: arrows + space, ESC quits)", flush=True)
             with open(path, "w") as f:
                 def log(obj, f=f):
                     f.write(json.dumps(obj) + "\n")
-                s = run_human_episode(game, log)
+                s = run_human_episode(game, log, args.scenario)
             s.update({"scenario": args.scenario, "path": str(path)})
             print(f"episode {ep} done: {s}", flush=True)
             with open(run_dir / f"{ts}_human_{args.scenario}_ep{ep}.summary.json",

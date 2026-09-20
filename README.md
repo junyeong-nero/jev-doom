@@ -1,78 +1,127 @@
-# jev-doom — Jev가 플레이하는 둠
+# jev-doom — Doom played by Jev
 
-VizDoom + TypeSafe Jev(System One 모델) 조합. 게임 루프는 코드가 돌리고,
-Jev는 매 판정마다 **어디가 위험한지(Choice) / 지금 쏠지(Noul) / 얼마나
-위험한지(Score)** 3개 질문에 답한다. 픽셀은 안 보고 게임 변수+오브젝트
-정보를 텍스트 JSON으로 바꿔서 던진다.
+VizDoom + TypeSafe's Jev (a System One model). The game loop runs in code;
+Jev makes one structured decision per tick — no text, no parsing, just typed
+answers with probabilities. Jev never sees pixels: object positions, angles,
+and a depth-derived wall map are encoded to JSON and sent as state.
 
-## 플레이 영상 (defend_the_center, 3킬)
+## Gameplay (deadly_corridor, skill 5 — 2 kills)
 
-![Jev 플레이](assets/defend_ep.gif)
+![Jev playing](assets/corridor_ep.gif)
 
-풀 화질: [assets/defend_ep.mp4](assets/defend_ep.mp4) (판정 1회당 1프레임, 8fps 타임랩스)
+Full quality: [assets/corridor_ep.mp4](assets/corridor_ep.mp4)
+(one frame per decision, 8fps timelapse)
 
-## 실행
+## Run it
 
 ```sh
 uv sync
-# .env에 JEV_APIKEY=... (또는 TYPESAFE_API_KEY)
-uv run python -m doom.play --scenario defend --episodes 2
-uv run python -m doom.play --scenario simple --visible  # 화면 보기
+# .env holds JEV_APIKEY=... (or TYPESAFE_API_KEY)
+uv run python -m doom.play --scenario corridor --episodes 2
+uv run python -m doom.play --scenario corridor --record  # also saves frames
+uv run python -m doom.human --scenario defend  # keyboard baseline
+uv run python -m doom.compare                  # scoreboard
 ```
 
-## 구조
+## How it works
 
 ```
-doom/
-  doom_env.py  # VizDoom 생성 (defend/basic/simple)
-  encoder.py   # 오브젝트 → 섹터 JSON (left/center/right + 근/중/원)
-  policy.py    # Jev 호출 + 버튼 매핑 + 폴백 (sweep, 탄약 게이트)
-  config.py    # 질문 정의, 임계값, 틱 상수
-  play.py      # 에피소드 루프 + runs/*.jsonl 로그
+VizDoom (60fps render, sync mode)
+  -> every N tics: snapshot to JSON (sectors, bearings, wall map)
+  -> Jev, 1 call, 2-3 questions in parallel -> discrete action
+  -> confidence gating + survival reflexes in code
 ```
 
-## 결과 (2026-09-20, 서울에서 측정, Jev 평균 ~270ms/콜)
+Jev decides *what*; code handles *how long* (hold tics) and safety
+overrides (dodge at critical danger, ammo gates, semi-auto release).
 
-| 시나리오 | 결과 |
-|---|---|
-| defend_the_center | 매 에피소드 킬 (1,1,1,1,**4**). 26발 권총 vs 데몬이라 장기 생존은 불가 |
-| simpler_basic | 2/2 승리, 무피해(hp 100). 중앙 정렬 후 1~2발로 처치 |
+## Action spaces
 
-## 비용 (실측, 53판정 defend 에피소드 기준)
+Jev only picks from a discrete set — the surrounding code maps each pick
+to a button vector held for a fixed number of tics (35 tics = 1 game second).
 
-판정 1회 평균 input 633토큰 / output 68토큰, 평균 280ms.
+**defend_the_center** (3 buttons: TURN_LEFT, TURN_RIGHT, ATTACK)
 
-| 모델 | input $/MTok | output $/MTok | 에피소드당 | Jev 대비 |
+| Jev question | Options | Mapping |
+|---|---|---|
+| aim: Choice(3) | left / center / right | turn toward most threatening sector, 16 tics (~7°) |
+| fire: Noul | p ≥ 0.65 + centered + ammo | ATTACK 2 tics + 2 release (semi-auto re-press) |
+| danger: Score(0–2) | — | < 0.8 conf → keep sweeping last turn direction |
+
+**basic / simpler_basic** (3 buttons: MOVE_LEFT, MOVE_RIGHT, ATTACK)
+
+Same 3 questions, fire threshold 0.5 (50 bullets vs 400HP needs volume).
+Aim maps to strafing instead of turning; goal is to strafe until the
+bearing hits 0°, then fire.
+
+**deadly_corridor** (7 buttons: FWD, BACK, STRAFE_L, STRAFE_R, TURN_L,
+TURN_R, ATTACK — skill 5, 6 armed shooters)
+
+| Jev Choice (9) | Button vector | Hold |
+|---|---|---|
+| advance / retreat | FWD / BACK | 8 tics |
+| strafe_left / strafe_right | strafe | 8 tics |
+| turn_left / turn_right | turn | 16 tics |
+| attack | ATTACK | 8 tics (~2 bullets via auto-refire) |
+| strafe_left_fire / strafe_right_fire | strafe + ATTACK | 8 tics |
+| danger: Score(0–2) | — | ≥ 1.7 with a stationary pick → code forces a dodge |
+
+Corridor extras: opening 6-decision sprint (learned from a scripted rush
+scoring +495), depth-buffer wall map (`path: wall/open` per sector),
+monster-vs-pickup filtering via label categories.
+
+## Results (measured 2026-09-20 from Seoul, ~250–300ms/decision)
+
+| Scenario | Best | Notes |
+|---|---|---|
+| defend_the_center | **4 kills** (6 bullets, 43 decisions) | kill every episode; pistol vs demons caps survival |
+| simpler_basic | **win 2/2**, untouched (hp 100) | strafe-to-center, 1–2 bullets per kill |
+| deadly_corridor (skill 5) | **2 kills**, reward 428 | spawn RNG dominates; death in 50–100 tics is normal |
+
+Corridor is genuinely brutal: six hitscanners focus-firing at skill 5 melt
+100hp in ~3 game-seconds in the open. Progress (not kills) is the score;
+tactics that mattered: opening sprint, strafe-fire, never trading stationary.
+
+## Cost (measured, 14-decision corridor episode)
+
+Per decision: 794 input / 108 output tokens, 248ms.
+
+| Model | $/MTok in | $/MTok out | Per episode | vs Jev |
 |---|---|---|---|---|
-| **Jev (실측)** | 0.042 | **무료** | **$0.0014** | 1x |
-| GPT-5.6 Luna | 0.20 | 1.20 | $0.0110 | 8x |
-| GPT-5.4 Nano | 0.20 | 1.25 | $0.0112 | 8x |
-| Claude Haiku 4.5 | 1.00 | 5.00 | $0.0516 | 37x |
-| GPT-5.6 Terra (동급 지능) | 2.00 | 12.00 | $0.1104 | 78x |
+| **Jev (measured)** | 0.042 | **free** | **$0.0005** | 1x |
+| GPT-5.6 Luna | 0.20 | 1.20 | $0.0040 | 9x |
+| GPT-5.4 Nano | 0.20 | 1.25 | $0.0041 | 9x |
+| Claude Haiku 4.5 | 1.00 | 5.00 | $0.0187 | 40x |
+| GPT-5.6 Terra (same intelligence tier) | 2.00 | 12.00 | $0.0403 | 86x |
 
-같은 속도로 1시간 돌리면(초당 ~3.5판정): Jev **$0.34** vs Terra $26.2.
-주의: LLM 쪽은 구조화 JSON만 내보낸다는 하한 가정. 실제로는 추론 토큰이
-붙어서 더 비싸지고, 응답도 초 단위로 느려진다 (Jev 실측 280ms).
+At ~3.5 decisions/sec for an hour: Jev **$0.34** vs Terra $26.
+LLM side assumes minimal structured JSON output (a lower bound — real
+reasoning traces cost more and answer in seconds, not 250ms).
+Rates: TypeSafe blog (Jev), OpenAI/Anthropic public pricing (Sep 2026).
 
-가격 출처: TypeSafe 블로그(Jev), OpenAI/Anthropic 공개 요금 (2026-09 기준).
+## Human vs Jev
 
-## 인간 vs Jev 기록 대결
-
-같은 맵·같은 룰로 번갈아 플레이하고 기록을 비교한다.
+Same maps, same rules, winner takes the scoreboard:
 
 ```sh
-uv run python -m doom.human --scenario defend   # ←/→(또는 A/D) + 스페이스, ESC 종료
-uv run python -m doom.compare                   # 기록표 출력
+uv run python -m doom.human --scenario defend  # arrows + space
+uv run python -m doom.human --scenario corridor  # WASD + arrows + space
+uv run python -m doom.compare
 ```
 
-점수표는 kills(처치) / bullets(소모탄) / acc(발당 처치율).
-추천 맵은 **defend_the_center** (적이 다가와서 교전이 성립).
-basic/simple은 적이 멀리 머물면 권총 산탄 때문에 50발로도 0킬 타임아웃이
-뜰 수 있음 — 봇·인간 공통. 탄약 아끼는 게 실력임.
+Score = kills / bullets / accuracy. Jev's defend record: 4 kills at 0.67
+per bullet. Corridor is open season — no human score posted yet.
 
-## 알려진 것들
+## Things learned (the hard way)
 
-- pistol은 세미오토: 발사 후 release 틱 필요 (`RELEASE_TICS`)
-- 회전 속도 ~0.44°/tic 이라 길게 잡고 돌림 (`TURN_TICS=16` + sweep)
-- basic 계열 몬스터는 유리몸 (1~2발 컷). 에피소드는 처치 시 종료, 처치 보상 +100
-- `runs/` 로그는 pre-action 스냅샷, 최종 hp/ammo/kills는 게임 변수 기준
+- Pistol is semi-auto: every shot needs a release tic, or holds go silent.
+- Turn rate is ~0.44°/tic — turn holds must be long, with anti-jitter sweep.
+- Doom's angle convention is flipped vs atan2: screen-right is negative.
+  Verified against the label buffer's screen-x, not by reasoning.
+- VizDoom `Object` uses `.id`, `Label` uses `.object_id`. Different structs.
+- Label `object_category` (Monster vs Armor/...) filters pickups out of
+  the threat list — a GreenArmor once counted as a "close enemy".
+- basic-family monsters are glass (1–2 bullets); a +101 "mystery reward"
+  turned out to be a kill bonus, not a bug.
+- `runs/` logs are pre-action snapshots; final hp/ammo/kills come from
+  game variables and are saved to `.summary.json`.

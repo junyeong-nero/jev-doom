@@ -38,6 +38,24 @@ SCENARIOS = {
             vzd.GameVariable.KILLCOUNT,
             vzd.GameVariable.ANGLE,
         ],
+        "skill": 3,
+    },
+    "corridor": {
+        "wad": "deadly_corridor.wad",
+        "buttons": [
+            vzd.Button.MOVE_FORWARD, vzd.Button.MOVE_BACKWARD,
+            vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT,
+            vzd.Button.TURN_LEFT, vzd.Button.TURN_RIGHT,
+            vzd.Button.ATTACK,
+        ],
+        "variables": [
+            vzd.GameVariable.HEALTH,
+            vzd.GameVariable.AMMO2,
+            vzd.GameVariable.KILLCOUNT,
+            vzd.GameVariable.ANGLE,
+        ],
+        "skill": 5,  # as designed: fast monsters, death_penalty 100
+        "depth": True,  # depth buffer for cover features
     },
 }
 
@@ -55,8 +73,11 @@ def make_game(scenario: str = "defend", visible: bool = False,
     game.set_available_game_variables(spec["variables"])
     game.set_labels_buffer_enabled(True)
     game.set_objects_info_enabled(True)
+    if spec.get("depth"):
+        game.set_depth_buffer_enabled(True)
     game.set_window_visible(visible)
     game.set_mode(vzd.Mode.PLAYER)
+    game.set_doom_skill(spec.get("skill", 3))
     game.set_episode_timeout(timeout_tics)
     game.init()
     return game

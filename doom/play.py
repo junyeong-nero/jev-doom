@@ -15,12 +15,13 @@ import httpx
 from . import config as C
 from .doom_env import make_game
 from .encoder import encode
-from .policy import decide, to_action
+from .policy import decide, reset_episode, to_action
 
 
 def run_episode(game, client, log, scenario: str = "defend",
                 frames: list | None = None) -> dict:
     game.new_episode()
+    reset_episode()
     decisions, latencies, shots = 0, [], 0
     last_turn = None
     while not game.is_episode_finished():
@@ -30,43 +31,68 @@ def run_episode(game, client, log, scenario: str = "defend",
         if frames is not None and state.screen_buffer is not None:
             frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
         snapshot = encode(state, list(state.game_variables))
+        atk_idx = C.ATTACK_IDX.get(scenario, 2)
         try:
-            answers, usage, ms = decide(client, snapshot)
+            answers, usage, ms = decide(client, snapshot, scenario)
         except Exception as e:  # Jev hiccup -> hold, keep episode alive
             print(f"  [warn] jev error: {e}, holding", flush=True)
-            game.make_action([0, 0, 0], C.TURN_TICS)
+            game.make_action([0] * len(game.get_available_buttons()),
+                             C.TURN_TICS)
             continue
         action, tics, reason = to_action(answers, snapshot, last_turn, scenario)
-        if action[2]:
+        if action[atk_idx]:
             shots += 1
             game.make_action(action, tics)
-            game.make_action([0, 0, 0], C.RELEASE_TICS)  # release: re-press per bullet
+            game.make_action([0] * len(action),
+                             C.RELEASE_TICS)  # release: re-press per bullet
         else:
             game.make_action(action, tics)
         if action in ([1, 0, 0], [0, 1, 0]):
             last_turn = action
         decisions += 1
         latencies.append(ms)
-        log({
-            "aim": answers["aim"]["choice"],
-            "aim_conf": round(answers["aim"]["confidence"], 3),
-            "fire": round(answers["fire"]["noul"], 3),
-            "danger": round(answers["danger"]["score"], 2),
-            "action": action, "reason": reason, "ms": round(ms),
-            "in_tok": usage.get("input_tokens", 0),
-            "out_tok": usage.get("output_tokens", 0),
-            "hp": snapshot["player"]["health"],
-            "ammo": snapshot["player"]["ammo"],
-            "kills": snapshot["player"]["kills"],
-        })
+        if scenario == "corridor":
+            picked = answers["action"]["choice"]
+            log({
+                "pick": picked,
+                "pick_conf": round(answers["action"]["confidence"], 3),
+                "danger": round(answers["danger"]["score"], 2),
+                "action": action, "reason": reason, "ms": round(ms),
+                "in_tok": usage.get("input_tokens", 0),
+                "out_tok": usage.get("output_tokens", 0),
+                "hp": snapshot["player"]["health"],
+                "ammo": snapshot["player"]["ammo"],
+                "kills": snapshot["player"]["kills"],
+            })
+        else:
+            log({
+                "aim": answers["aim"]["choice"],
+                "aim_conf": round(answers["aim"]["confidence"], 3),
+                "fire": round(answers["fire"]["noul"], 3),
+                "danger": round(answers["danger"]["score"], 2),
+                "action": action, "reason": reason, "ms": round(ms),
+                "in_tok": usage.get("input_tokens", 0),
+                "out_tok": usage.get("output_tokens", 0),
+                "hp": snapshot["player"]["health"],
+                "ammo": snapshot["player"]["ammo"],
+                "kills": snapshot["player"]["kills"],
+            })
         if decisions == 1 or decisions % 10 == 0:
-            print(f"  d{decisions}: aim={answers['aim']['choice']} "
-                  f"fire={answers['fire']['noul']:.2f} "
-                  f"danger={answers['danger']['score']:.2f} "
-                  f"hp={snapshot['player']['health']:.0f} "
-                  f"ammo={snapshot['player']['ammo']:.0f} "
-                  f"kills={snapshot['player']['kills']} "
-                  f"[{reason}, {ms:.0f}ms]", flush=True)
+            if scenario == "corridor":
+                print(f"  d{decisions}: pick={answers['action']['choice']} "
+                      f"danger={answers['danger']['score']:.2f} "
+                      f"hp={snapshot['player']['health']:.0f} "
+                      f"ammo={snapshot['player']['ammo']:.0f} "
+                      f"kills={snapshot['player']['kills']} "
+                      f"[{reason}, {ms:.0f}ms]", flush=True)
+            else:
+                print(f"  d{decisions}: aim={answers['aim']['choice']} "
+                      f"fire={answers['fire']['noul']:.2f} "
+                      f"danger={answers['danger']['score']:.2f} "
+                      f"hp={snapshot['player']['health']:.0f} "
+                      f"ammo={snapshot['player']['ammo']:.0f} "
+                      f"kills={snapshot['player']['kills']} "
+                      f"[{reason}, {ms:.0f}ms]", flush=True)
     total = game.get_total_reward()
     return {
         "decisions": decisions,
@@ -79,7 +105,7 @@ def run_episode(game, client, log, scenario: str = "defend",
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="defend",
-                    choices=["defend", "basic", "simple"])
+                    choices=["defend", "basic", "simple", "corridor"])
     ap.add_argument("--episodes", type=int, default=1)
     ap.add_argument("--visible", action="store_true")
     ap.add_argument("--timeout", type=int, default=2100)

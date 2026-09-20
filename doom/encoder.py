@@ -5,6 +5,8 @@ No pixels touch Jev: bearings in degrees, distances bucketed.
 """
 import math
 
+import numpy as np
+
 from . import config as C
 
 
@@ -37,10 +39,16 @@ def encode(state, game_vars) -> dict:
 
     enemies = []
     visible_ids = {label.object_id for label in (state.labels or [])}
-    # Skip non-threats: the player, bullet impact puffs, blood.
+    categories = {label.object_id: getattr(label, "object_category", "")
+                  for label in (state.labels or [])}
+    # Skip non-threats: the player, impact effects, and VISIBLE pickups
+    # (labels carry clean categories: Monster vs Armor/Weapon/...).
+    # Off-screen pickups can't be categorized; they only add turn bias.
     IGNORE = {"DoomPlayer", "BulletPuff", "Blood"}
     for o in state.objects or []:
         if o.name in IGNORE:
+            continue
+        if o.id in visible_ids and categories.get(o.id) != "Monster":
             continue
         dx = float(o.position_x) - px
         dy = float(o.position_y) - py
@@ -76,9 +84,23 @@ def encode(state, game_vars) -> dict:
         e["visible"] and abs(e["bearing"]) <= C.CENTER_DEGREES for e in enemies
     )
 
-    return {
+    snap = {
         "player": {"health": health, "ammo": ammo, "kills": int(kills)},
         "enemies_total": len(enemies),
         "sectors": sectors,
         "center_visible": center_visible,
     }
+
+    # Corridor maps: per-sector wall proximity from the depth buffer.
+    # "wall" = blocked that way, "open" = free path. Robust median
+    # (enemies are a minority of pixels).
+    if getattr(state, "depth_buffer", None) is not None:
+        d = state.depth_buffer
+        w = d.shape[1]
+        thirds = {"left": d[:, :w // 3], "center": d[:, w // 3:2 * w // 3],
+                  "right": d[:, 2 * w // 3:]}
+        snap["path"] = {
+            name: ("open" if float(np.median(slab)) >= 20.0 else "wall")
+            for name, slab in thirds.items()
+        }
+    return snap

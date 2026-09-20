@@ -7,7 +7,7 @@ import glob
 import json
 from pathlib import Path
 
-START_AMMO = {"defend": 26, "basic": 50, "simple": 50}
+START_AMMO = {"defend": 26, "basic": 50, "simple": 50, "corridor": 52}
 
 
 def load_bot(path: str, scenario: str) -> dict:
@@ -55,7 +55,7 @@ def main() -> None:
     ap.add_argument("--scenario", default=None)
     args = ap.parse_args()
 
-    for scenario in (["defend", "basic", "simple"]
+    for scenario in (["defend", "basic", "simple", "corridor"]
                      if args.scenario is None else [args.scenario]):
         print(f"=== {scenario} ===")
         entries = []
