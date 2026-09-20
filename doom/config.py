@@ -29,6 +29,17 @@ FIRE_INSTRUCTIONS = (
     "even at longer range; when ammo is almost out, only shoot sure hits."
 )
 
+FOCUS_INSTRUCTIONS = (
+    "TARGET LOCK: state.focus is the enemy you are already engaging "
+    "({{id, type, last-seen bearing, engaged count}}, or null when no lock). "
+    "Hold focus until the target is dead (it disappears from enemies AND "
+    "kills ticked up — note kills_change attribution is approximate, a death "
+    "tick may credit a different nearby enemy) or fully lost (gone from "
+    "enemies for several decisions). When focus is off-screen, prefer "
+    "turning back toward its last-seen bearing to re-acquire it instead of "
+    "switching to a new target. Finish one enemy before starting another."
+)
+
 QUESTIONS = {
     "aim": {
         "type": "choice",
@@ -38,7 +49,8 @@ QUESTIONS = {
             "over off-screen ones. Sectors are relative to where the player faces. "
             "Visible enemies also report x_err: horizontal screen pixels from "
             "center (+ means right of center, 0 = centered); prefer nearly "
-            "centered targets."
+            "centered targets. "
+            + FOCUS_INSTRUCTIONS
         ),
         "criteria": {
             "left": "Biggest threat is to the left of where the player faces",
@@ -107,7 +119,12 @@ CORRIDOR_QUESTIONS = {
             "aim) or advance out of it. Retreat is a dead-end wall, never "
             "retreat twice in a row. "
             "Advance only when center path is open. If your shots keep "
-            "missing (ammo_used up, kills_change 0), close distance first."
+            "missing (ammo_used up, kills_change 0), close distance first. "
+            "TARGET LOCK: state.focus is the enemy you are already engaging "
+            "(or null when no lock). Hold it until dead (disappears AND kills "
+            "ticked up — kills_change attribution is approximate) or fully "
+            "lost; when it leaves the screen, turn back toward its last-seen "
+            "bearing to re-acquire instead of switching targets."
         ),
         "criteria": {
             "advance": "Sprint forward: path center open, no close threat",

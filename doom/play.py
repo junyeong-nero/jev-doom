@@ -39,6 +39,67 @@ def _step(game, action: list, tics: int, frames: list | None) -> None:
                 frames.append(st.screen_buffer.transpose(1, 2, 0).copy())
 
 
+#: Focus coast: decisions a lost (unseen, no kill credit) target is held
+#: via its last-seen bearing before it counts as fully lost.
+FOCUS_MAX_MISSES = 3
+
+
+def _public_focus(focus: dict | None) -> dict | None:
+    """Scenario-agnostic lock view for the snapshot (no private counters)."""
+    if focus is None:
+        return None
+    return {"id": focus["id"], "type": focus["type"],
+            "bearing": focus["bearing"], "engaged": focus["engaged"]}
+
+
+def _update_focus(engaged: dict, focus: dict | None, enemies: list,
+                  kills_now: int, kills_prev: int | None) -> dict | None:
+    """Engagement table + target-lock update. Scenario-agnostic.
+
+    engaged: object id -> {type, last bearing/dist, engaged decision count}.
+    Returns the lock record (with private misses/dist) or None. The lock is
+    held until the target disappears with a kill credit (kills_change
+    attribution is approximate) or stays unseen past FOCUS_MAX_MISSES
+    (fully lost); otherwise it coasts on its last-seen bearing.
+    """
+    by_id = {e["id"]: e for e in enemies}
+    for e in enemies:
+        rec = engaged.get(e["id"])
+        if rec is None:
+            engaged[e["id"]] = {"type": e["type"], "bearing": e["bearing"],
+                                "dist": e["dist"], "engaged": 0}
+        else:
+            rec.update({"type": e["type"], "bearing": e["bearing"],
+                        "dist": e["dist"]})
+    kills_change = kills_now - kills_prev if kills_prev is not None else 0
+    if focus is not None:
+        cur = by_id.get(focus["id"])
+        if cur is not None:
+            focus.update({"type": cur["type"], "bearing": cur["bearing"],
+                          "dist": cur["dist"], "misses": 0})
+        elif kills_change > 0:
+            focus = None  # dead (kill credit is approximate)
+        else:
+            focus["misses"] += 1
+            if focus["misses"] > FOCUS_MAX_MISSES:
+                focus = None  # fully lost
+    if focus is None:
+        # enemies arrive sorted visible-first, closest-first.
+        visible = [e for e in enemies if e.get("visible")]
+        if visible:
+            pick = visible[0]
+            focus = {"id": pick["id"], "type": pick["type"],
+                     "bearing": pick["bearing"], "dist": pick["dist"],
+                     "engaged": 0, "misses": 0}
+    if focus is not None:
+        rec = engaged.setdefault(focus["id"], {
+            "type": focus["type"], "bearing": focus["bearing"],
+            "dist": focus["dist"], "engaged": 0})
+        rec["engaged"] += 1
+        focus["engaged"] = rec["engaged"]
+    return focus
+
+
 def run_episode(game, client, log, scenario: str = "defend",
                 frames: list | None = None, seed: int | None = None) -> dict:
     if seed is not None:
@@ -49,6 +110,9 @@ def run_episode(game, client, log, scenario: str = "defend",
     last_turn = None
     after_turn = False  # previous action was a turn -> observe once
     prev = None  # feedback for the next snapshot
+    engaged = {}  # object id -> {type, last bearing/dist, engaged count}
+    focus = None  # lock record: {id, type, bearing, dist, engaged, misses}
+    prev_kills = None
     while not game.is_episode_finished():
         state = game.get_state()
         if state is None:
@@ -57,6 +121,11 @@ def run_episode(game, client, log, scenario: str = "defend",
             frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
         vars_now = list(state.game_variables)
         snapshot = encode(state, vars_now, last=prev)
+        focus = _update_focus(engaged, focus, snapshot["enemies"],
+                              snapshot["player"]["kills"], prev_kills)
+        prev_kills = snapshot["player"]["kills"]
+        snapshot["focus"] = _public_focus(focus)
+        focus_id = focus["id"] if focus is not None else None
         atk_idx = C.ATTACK_IDX.get(scenario, 2)
         try:
             answers, usage, ms = decide(client, snapshot, scenario)
@@ -102,6 +171,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                 "hp": snapshot["player"]["health"],
                 "ammo": snapshot["player"]["ammo"],
                 "kills": snapshot["player"]["kills"],
+                "focus": focus_id,
             })
         else:
             log({
@@ -115,6 +185,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                 "hp": snapshot["player"]["health"],
                 "ammo": snapshot["player"]["ammo"],
                 "kills": snapshot["player"]["kills"],
+                "focus": focus_id,
             })
         if decisions == 1 or decisions % 10 == 0:
             if scenario == "corridor":
@@ -123,6 +194,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                       f"hp={snapshot['player']['health']:.0f} "
                       f"ammo={snapshot['player']['ammo']:.0f} "
                       f"kills={snapshot['player']['kills']} "
+                      f"focus={focus_id} "
                       f"[{reason}, {ms:.0f}ms]", flush=True)
             else:
                 print(f"  d{decisions}: aim={answers['aim']['choice']} "
@@ -131,6 +203,7 @@ def run_episode(game, client, log, scenario: str = "defend",
                       f"hp={snapshot['player']['health']:.0f} "
                       f"ammo={snapshot['player']['ammo']:.0f} "
                       f"kills={snapshot['player']['kills']} "
+                      f"focus={focus_id} "
                       f"[{reason}, {ms:.0f}ms]", flush=True)
     total = game.get_total_reward()
     return {

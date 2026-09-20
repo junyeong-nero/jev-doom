@@ -29,12 +29,17 @@ def _bucket(dist: float) -> str:
     return "far"
 
 
-def encode(state, game_vars, last: dict | None = None) -> dict:
+def encode(state, game_vars, last: dict | None = None,
+           focus: dict | None = None) -> dict:
     """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?].
 
     last: feedback from the previous decision
     {"action": str, "hp_change": float, "ammo_used": float, "kills_change": int}
     so Jev can see the consequences of its last pick.
+
+    focus: current engagement-lock target
+    {"id": int, "type": str, "bearing": float, "engaged": int}
+    (last-seen bearing while the target is off-screen). None when no lock.
     """
     health, ammo, kills = (float(game_vars[i]) for i in range(3))
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
@@ -84,6 +89,7 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         if o.id in visible_ids and lb is not None:
             x_err = round(float(lb.x) + float(lb.width) / 2 - screen_w / 2)
         enemies.append({
+            "id": o.id,
             "type": o.name,
             "bearing": round(bearing, 1),
             "dist": round(dist),
@@ -123,6 +129,7 @@ def encode(state, game_vars, last: dict | None = None) -> dict:
         "enemies": enemies,
         "sectors": sectors,
         "center_visible": center_visible,
+        "focus": focus,  # engagement lock (None when no target held)
     }
     if last is not None:
         snap["last"] = last
