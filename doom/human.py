@@ -24,11 +24,11 @@ LOG_EVERY_TICS = 7
 
 def read_action(keys, scenario: str = "defend") -> list:
     if scenario == "corridor":
-        # [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK]
+        # [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK, SELECT_WEAPON3]
         return [int(bool(keys[pygame.K_w])), int(bool(keys[pygame.K_s])),
                 int(bool(keys[pygame.K_a])), int(bool(keys[pygame.K_d])),
                 int(bool(keys[pygame.K_LEFT])), int(bool(keys[pygame.K_RIGHT])),
-                int(bool(keys[pygame.K_SPACE]))]
+                int(bool(keys[pygame.K_SPACE])), int(bool(keys[pygame.K_q]))]
     left = keys[pygame.K_LEFT] or keys[pygame.K_a]
     right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
     fire = keys[pygame.K_SPACE]
@@ -105,7 +105,7 @@ def main() -> None:
     try:
         for ep in range(args.episodes):
             path = run_dir / f"{ts}_human_{args.scenario}_ep{ep}.jsonl"
-            print(f"episode {ep}: play! (corridor: WASD + arrows + space | "
+            print(f"episode {ep}: play! (corridor: WASD + arrows + space + Q (shotgun) | "
           f"others: arrows + space, ESC quits)", flush=True)
             with open(path, "w") as f:
                 def log(obj, f=f):
