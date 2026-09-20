@@ -159,6 +159,11 @@ decisions, 7.2 shots/ep. The unlock: re-aiming every 4 tics instead of
 freezing mid-turn. Still dies with ~19 bullets left — fire volume is the
 next lever (their bots empty the mag; heuristic does 120+ shots/ep).
 
+Post-merge composition (scan turns + turn balance + fire-as-Choice,
+issues #15–17): seeds 1–5 → kills 3,3,4,5,3 = **3.60±0.80 mean**.
+Variance tightened (1.17→0.80); volume still the ceiling (6–15 shots
+vs heuristic 120+).
+
 Latest corridor suite (same build; SPEED auto-run on locomotion):
 
 | seed | kills | bullets | reward |
