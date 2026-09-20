@@ -75,6 +75,14 @@ _cover_visible_before = 0
 _cover_ttl = 0
 COVER_TTL = 4  # decisions a cover move stays "active" for success check
 
+#: Issue-17 turn balance: cumulative defend turn counts. Low-confidence
+#: sweep continuations that would push one side past 60% flip to the
+#: under-used side (target L/R within 40:60).
+_turn_left_n = 0
+_turn_right_n = 0
+TURN_BALANCE_SHARE = 0.6
+TURN_BALANCE_MIN = 4
+
 #: Opening sprint: first N corridor decisions always advance, to clear
 #: the spawn kill-zone before fighting. (Learned from a scripted rush
 #: scoring +495 vs -16 dodging in place.)
@@ -84,12 +92,15 @@ OPENING_SPRINT = 6
 def reset_episode() -> None:
     global _corridor_decisions, _last_seen, _prev_hits
     global _cover_active, _cover_visible_before, _cover_ttl
+    global _turn_left_n, _turn_right_n
     _corridor_decisions = 0
     _last_seen = None
     _prev_hits = None
     _cover_active = False
     _cover_visible_before = 0
     _cover_ttl = 0
+    _turn_left_n = 0
+    _turn_right_n = 0
 
 
 def _visible_count(snapshot: dict) -> int:
@@ -282,6 +293,32 @@ def _turn_tics(snapshot: dict, sector: str) -> tuple[int, float | None]:
     return tics, tgt["bearing"]
 
 
+def _note_turn(vec: list) -> None:
+    """Issue-17: record a defend turn for balance accounting."""
+    global _turn_left_n, _turn_right_n
+    if vec == [1, 0, 0]:
+        _turn_left_n += 1
+    elif vec == [0, 1, 0]:
+        _turn_right_n += 1
+
+
+def _balanced_sweep(last_turn: list) -> tuple[list, bool]:
+    """Issue-17: bias a low-confidence sweep toward the under-used side.
+
+    Returns (vector, flipped). When one side holds more than
+    TURN_BALANCE_SHARE of turns so far (>= TURN_BALANCE_MIN total),
+    a continuation in that over-used direction flips to the other side.
+    """
+    total = _turn_left_n + _turn_right_n
+    if total < TURN_BALANCE_MIN:
+        return last_turn, False
+    if last_turn == [1, 0, 0] and _turn_left_n / total > TURN_BALANCE_SHARE:
+        return [0, 1, 0], True
+    if last_turn == [0, 1, 0] and _turn_right_n / total > TURN_BALANCE_SHARE:
+        return [1, 0, 0], True
+    return last_turn, False
+
+
 def to_action(answers: dict, snapshot: dict,
               last_turn: list | None = None,
               scenario: str = "defend",
@@ -314,6 +351,7 @@ def to_action(answers: dict, snapshot: dict,
     if (took_damage and not snapshot["center_visible"]
             and _last_seen in ("left", "right")):
         vec = [1, 0, 0] if _last_seen == "left" else [0, 1, 0]
+        _note_turn(vec)
         return vec, C.TURN_TICS, f"face threat {_last_seen} (damage, none visible)"
 
     # NOTE: no settle-observe after turns (removed): with an explicit numeric
@@ -324,16 +362,38 @@ def to_action(answers: dict, snapshot: dict,
         if aim["choice"] == "left":
             tics, b = _turn_tics(snapshot, "left")
             if b is None:
+                # Issue-17: blind sweep -> turn toward remembered threat.
+                if _last_seen == "right":
+                    tics2, b2 = _turn_tics(snapshot, "right")
+                    _note_turn([0, 1, 0])
+                    return [0, 1, 0], tics2, (
+                        "aim left blind -> face right (memory)"
+                        if b2 is None else f"aim left blind -> face right b={b2}")
+                _note_turn([1, 0, 0])
                 return [1, 0, 0], tics, "aim left (no visible target)"
+            _note_turn([1, 0, 0])
             return [1, 0, 0], tics, f"aim left b={b} tics={tics}"
         if aim["choice"] == "right":
             tics, b = _turn_tics(snapshot, "right")
             if b is None:
+                # Issue-17: blind sweep -> turn toward remembered threat.
+                if _last_seen == "left":
+                    tics2, b2 = _turn_tics(snapshot, "left")
+                    _note_turn([1, 0, 0])
+                    return [1, 0, 0], tics2, (
+                        "aim right blind -> face left (memory)"
+                        if b2 is None else f"aim right blind -> face left b={b2}")
+                _note_turn([0, 1, 0])
                 return [0, 1, 0], tics, "aim right (no visible target)"
+            _note_turn([0, 1, 0])
             return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
         return [0, 0, 0], C.TURN_TICS, "aim center"
 
-    # low confidence: keep sweeping instead of jittering
+    # low confidence: keep sweeping instead of jittering, biased toward
+    # the under-used side (issue-17 balance).
     if last_turn in ([1, 0, 0], [0, 1, 0]):
-        return last_turn, C.TURN_TICS, f"sweep conf={aim['confidence']:.2f}"
+        vec, flipped = _balanced_sweep(last_turn)
+        _note_turn(vec)
+        tag = "balanced " if flipped else ""
+        return vec, C.TURN_TICS, f"{tag}sweep conf={aim['confidence']:.2f}"
     return [0, 0, 0], C.TURN_TICS, f"hold conf={aim['confidence']:.2f}"
