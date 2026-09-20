@@ -23,6 +23,7 @@ uv run pytest   # offline unit tests (synthetic states, no engine)
 | Command | What |
 |---|---|
 | `doom.play --brain jev\|heuristic [--suite\|--seed N] [--episodes N] [--record] [--timeout N] [--visible]` | episodes → `runs/*.jsonl` + `.summary.json` |
+| `doom.watch --brain jev\|heuristic [--suite\|--seed N] [--episodes N] [--timeout N]` | live visualizer (pygame): game + enemy boxes + decision panel, ESC quits; logs to `runs/` like play |
 | `doom.human [--episodes N]` | keyboard play (pygame window, arrows + space) |
 | `doom.compare` | scoreboard incl. seeded mean/std |
 
@@ -42,6 +43,11 @@ uv run pytest   # offline unit tests (synthetic states, no engine)
 - `doom/config.py` — Jev questions, thresholds, tic constants.
 - `doom/play.py` — 1-flight async episode loop (Jev) + synchronous
   baseline loop, press+release firing, logging, seeds, recording.
+- `doom/watch.py` — same loops with a pygame HUD (game + boxes +
+  compass + target/fire/danger panel). Mirrors play's pacing:
+  latency-gap holds run at live rate (`pace=True`), decision actions
+  unpaced. Dropping pace freezes the emulator through gaps and the
+  episode dies before d1 — verified the hard way.
 - `tests/` — offline pytest suite; `conftest.py` has the synthetic
   state/label/object builders and a `FakeGame`.
 - `doom/compare.py`, `doom/human.py` — scoreboard, keyboard play.

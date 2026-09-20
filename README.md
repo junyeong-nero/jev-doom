@@ -39,6 +39,7 @@ uv run python -m doom.compare
 
 # extras
 uv run python -m doom.play --brain jev --record  # also saves frames
+uv run python -m doom.watch --brain jev --seed 1 # live visualizer: game + Jev's mind
 uv run python -m doom.human                      # arrows + space, you play it
 uv run pytest   # offline unit tests (synthetic states, no engine)
 ```
@@ -160,6 +161,26 @@ Same map, same rules:
 uv run python -m doom.human    # arrows + space
 uv run python -m doom.compare
 ```
+
+## Watch
+
+`doom.watch` wraps an episode in a live window: the game on the left,
+Jev's mind on the right — what it sees (enemy context list), what it
+decides (target + fire + danger with confidences), and what it costs
+(latency, tokens, hp/ammo/kills, recent decisions).
+
+<p align="center">
+  <img src="assets/watch_shot.png" alt="Jev visualizer: T1 SHOOT 100%" width="720" />
+  <br />
+  <sub>Jev brain, seed 1, decision 10: locked T1 (Demon, centered) — SHOOT at 100% confidence. Green box = picked target, amber = other visible enemies, red frame = firing.</sub>
+</p>
+
+```sh
+uv run python -m doom.watch --brain jev --seed 1        # watch Jev think
+uv run python -m doom.watch --brain heuristic --suite   # baseline, no API key
+```
+
+ESC quits. Episodes still log to `runs/` like `doom.play`.
 
 ## Notes
 
