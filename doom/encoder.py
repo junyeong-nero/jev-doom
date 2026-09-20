@@ -67,6 +67,18 @@ def _bucket(dist: float) -> str:
     return "far"
 
 
+SIDE_WIDE_DEGREES = 45.0  # |bearing| beyond this is far_left / far_right
+
+
+def side_of(bearing: float) -> str:
+    """Word bucket for a bearing, in the exact vocabulary the questions use."""
+    if abs(bearing) <= C.CENTER_DEGREES:
+        return "centered"
+    if abs(bearing) <= SIDE_WIDE_DEGREES:
+        return "left" if bearing < 0 else "right"
+    return "far_left" if bearing < 0 else "far_right"
+
+
 def encode(state, game_vars, last: dict | None = None,
            focus: dict | None = None) -> dict:
     """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?,
@@ -148,6 +160,7 @@ def encode(state, game_vars, last: dict | None = None,
             "id": o.id,
             "type": o.name,
             "bearing": round(bearing, 1),
+            "side": side_of(bearing),
             "dist": round(dist),
             "range": _bucket(dist),
             "visible": o.id in visible_ids,
@@ -158,6 +171,8 @@ def encode(state, game_vars, last: dict | None = None,
     # Most threatening first: visible, then closest. Cap for token budget.
     enemies.sort(key=lambda e: (not e["visible"], e["dist"]))
     enemies = enemies[:MAX_ENEMIES]
+    for i, e in enumerate(enemies, 1):
+        e["idx"] = i  # question keys: Jev picks an enemy by this index
 
     sectors = {}
     for name, lo, hi in (("left", -180, -C.CENTER_DEGREES),
