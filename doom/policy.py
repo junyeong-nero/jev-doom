@@ -112,6 +112,9 @@ def _turn_tics(snapshot: dict, sector: str) -> tuple[int, float | None]:
     tgt = min(cands, key=lambda e: e.get("dist", 1 << 30))
     tics = max(C.TURN_TICS_MIN,
                round(abs(tgt["bearing"]) / C.TURN_DEG_PER_TIC))
+    # Merger cap: a single hold must never freeze the bot (180 deg would be
+    # ~409 tics ~ 12 game-seconds of standing still). Re-aim next decision.
+    tics = min(tics, C.TURN_TICS_MAX)
     return tics, tgt["bearing"]
 
 

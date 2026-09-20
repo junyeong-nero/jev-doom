@@ -66,6 +66,7 @@ FIRE_THRESHOLD = {"defend": 0.65, "basic": 0.5, "simple": 0.5}  # 50 bullets vs 
 TURN_TICS = 16           # fallback turn hold when no visible target bears on the sector
 TURN_DEG_PER_TIC = 0.44  # measured turn rate: proportional holds = round(|bearing| / 0.44)
 TURN_TICS_MIN = 2        # smallest turn: micro-adjusts land at 2-4 tics
+TURN_TICS_MAX = 100      # cap a single hold (~44 deg): re-aim instead of freezing
 OBSERVE_TICS = 4         # settle/observe hold after a turn (anti-overshoot)
 MOVE_TICS = 8            # corridor locomotion hold per decision
 FIRE_TICS = 2           # press held 2 tics (see play.py: always followed by release)
