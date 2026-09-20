@@ -110,7 +110,7 @@ monster-vs-pickup filtering via label categories.
 |---|---|---|
 | defend_the_center | **4 kills** (6 bullets, 43 decisions) | kill every episode; pistol vs demons caps survival |
 | simpler_basic | **win 2/2**, untouched (hp 100) | strafe-to-center, 1–2 bullets per kill |
-| deadly_corridor (skill 5) | **2 kills**, reward 428 (v2 context; kills in ~half of episodes) | spawn RNG decides a third of runs; death in 50–100 tics is normal |
+| deadly_corridor (skill 5) | **2 kills**, reward 1100 (seed 5; SPEED sprint) | suite mean 0.40±0.80 kills, 675±244 reward — progress, not kills, is the score |
 
 Corridor is genuinely brutal: six hitscanners focus-firing at skill 5 melt
 100hp in ~3 game-seconds in the open. Progress (not kills) is the score;
@@ -128,19 +128,32 @@ uv run python -m doom.compare                         # per-seed table + mean/st
 log filenames (`..._ep0_seed1.jsonl`) and `.summary.json`. Unseeded logs
 render exactly as before.
 
-Latest defend suite (2026-09-20):
+Latest defend suite (2026-09-20, merged main — aim/focus/cover/async live):
 
 | seed | kills | bullets | acc | reward |
 |---|---|---|---|---|
-| 1 | 1 | 2 | 0.50 | 1 |
+| 1 | 2 | 4 | 0.50 | 2 |
 | 2 | 1 | 1 | 1.00 | 1 |
-| 3 | 1 | 1 | 1.00 | 1 |
-| 4 | 1 | 1 | 1.00 | 1 |
-| 5 | 1 | 1 | 1.00 | 1 |
-| mean±std | 1.00±0.00 | — | — | 1±0 |
+| 3 | 1 | 2 | 0.50 | 1 |
+| 4 | 1 | 2 | 0.50 | 1 |
+| 5 | 1 | 2 | 0.50 | 1 |
+| mean±std | 1.20±0.40 | — | — | 1.2±0.4 |
 
-Seeded defend (1 kill each) sits well below the unseeded best (4 kills) —
-spawn decides a lot, which is exactly why the suite exists.
+Latest corridor suite (same build; SPEED auto-run on locomotion):
+
+| seed | kills | bullets | reward |
+|---|---|---|---|
+| 1 | 0 | 0 | 339 |
+| 2 | 0 | 0 | 644 |
+| 3 | 0 | 0 | 621 |
+| 4 | 0 | 0 | 668 |
+| 5 | 2 | 0 | 1100 |
+| mean±std | 0.40±0.80 | — | 675±244 |
+
+Honest footnote: the merged corridor bot currently never pulls the trigger
+(0 bullets all suite) — danger never drops below the 1.7 dodge line with 6
+shooters up, so every attack becomes a strafe. It scores on sprint progress
+plus infighting. Teaching it to actually shoot back is open (see issues).
 
 Caveat (verified): the *game* is deterministic under a fixed seed — scripted
 actions, same seed twice → byte-identical frames + variables on defend
