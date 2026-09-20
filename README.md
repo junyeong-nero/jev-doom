@@ -164,6 +164,14 @@ issues #15–17): seeds 1–5 → kills 3,3,4,5,3 = **3.60±0.80 mean**.
 Variance tightened (1.17→0.80); volume still the ceiling (6–15 shots
 vs heuristic 120+).
 
+Sustained fire (issue #21: chained bursts on centered+visible close/mid
+targets, cap 12 tics, collapse under heavy fire): seeds 1–5 → kills
+5,1,3,3,2 = **2.80±1.33 mean**. Mechanism verified (seed 1: 12 shots →
+5 kills) but suite-neutral within noise — spawn-gib episodes (seed 2:
+dead in 22 decisions) dominate the mean. Chained bursts help iff targets
+survive the first burst; the binding constraint is now shoot-pick
+frequency, not hold length.
+
 Latest corridor suite (same build; SPEED auto-run on locomotion):
 
 | seed | kills | bullets | reward |
