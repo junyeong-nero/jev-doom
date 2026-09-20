@@ -1,13 +1,16 @@
 """Game state -> Jev JSON snapshot.
 
-Uses objects_info (world coords + visibility) + ANGLE game variable.
-No pixels touch Jev: bearings in degrees, distances bucketed.
+Uses objects_info (world coords, velocity, visibility) + ANGLE game variable.
+No pixels touch Jev: everything numeric/textual, with units documented in
+the question instructions (bearings in degrees, right-positive).
 """
 import math
 
 import numpy as np
 
 from . import config as C
+
+MAX_ENEMIES = 8
 
 
 def _norm180(deg: float) -> float:
@@ -26,8 +29,13 @@ def _bucket(dist: float) -> str:
     return "far"
 
 
-def encode(state, game_vars) -> dict:
-    """state: vizdoom GameState, game_vars: list [health, ammo, kills, angle?]."""
+def encode(state, game_vars, last: dict | None = None) -> dict:
+    """state: vizdoom GameState, game_vars: [health, ammo, kills, angle?].
+
+    last: feedback from the previous decision
+    {"action": str, "hp_change": float, "ammo_used": float, "kills_change": int}
+    so Jev can see the consequences of its last pick.
+    """
     health, ammo, kills = (float(game_vars[i]) for i in range(3))
     angle = float(game_vars[3]) if len(game_vars) > 3 else 0.0
 
@@ -52,17 +60,26 @@ def encode(state, game_vars) -> dict:
             continue
         dx = float(o.position_x) - px
         dy = float(o.position_y) - py
-        dist = math.hypot(dx, dy)
+        dist = math.hypot(dx, dy) or 1.0
         abs_deg = math.degrees(math.atan2(dy, dx))
         # Doom: facing +X at angle 0, right hand points -Y, so screen-right
         # is negative atan2 direction -> bearing = angle - abs (right positive)
         bearing = _norm180(angle - abs_deg)
+        # Radial velocity: negative = closing in on the player.
+        vx, vy = float(o.velocity_x), float(o.velocity_y)
+        closing = (vx * dx + vy * dy) / dist < -1.0
         enemies.append({
+            "type": o.name,
             "bearing": round(bearing, 1),
-            "dist": round(dist, 1),
+            "dist": round(dist),
             "range": _bucket(dist),
             "visible": o.id in visible_ids,
+            "closing": closing,
         })
+
+    # Most threatening first: visible, then closest. Cap for token budget.
+    enemies.sort(key=lambda e: (not e["visible"], e["dist"]))
+    enemies = enemies[:MAX_ENEMIES]
 
     sectors = {}
     for name, lo, hi in (("left", -180, -C.CENTER_DEGREES),
@@ -85,11 +102,14 @@ def encode(state, game_vars) -> dict:
     )
 
     snap = {
-        "player": {"health": health, "ammo": ammo, "kills": int(kills)},
-        "enemies_total": len(enemies),
+        "player": {"health": health, "ammo": int(ammo), "kills": int(kills),
+                   "angle": round(angle, 1), "pos": [round(px), round(py)]},
+        "enemies": enemies,
         "sectors": sectors,
         "center_visible": center_visible,
     }
+    if last is not None:
+        snap["last"] = last
 
     # Corridor maps: per-sector wall proximity from the depth buffer.
     # "wall" = blocked that way, "open" = free path. Robust median

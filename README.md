@@ -24,6 +24,39 @@ uv run python -m doom.human --scenario defend  # keyboard baseline
 uv run python -m doom.compare                  # scoreboard
 ```
 
+## What Jev actually sees (context injection)
+
+No pixels, no history — one JSON snapshot per decision. Example (real,
+deadly_corridor spawn):
+
+```json
+{
+  "player": {"health": 100, "ammo": 52, "kills": 0, "angle": 0, "pos": [0, 0]},
+  "enemies": [
+    {"type": "ShotgunGuy", "bearing": -21.8, "dist": 172,
+     "range": "close", "visible": true, "closing": false},
+    {"type": "Zombieman", "bearing": 21.8, "dist": 172,
+     "range": "close", "visible": true, "closing": false},
+    {"type": "Zombieman", "bearing": -6.0, "dist": 611,
+     "range": "mid", "visible": false, "closing": false}
+  ],
+  "sectors": {"left": {"enemies": 1, "nearest": "close", "visible": 1}, "...": {}},
+  "center_visible": false,
+  "path": {"left": "wall", "center": "open", "right": "wall"},
+  "last": {"action": "strafe left + fire",
+           "hp_change": -18, "ammo_used": 2, "kills_change": 0}
+}
+```
+
+Field guide (also spelled out in the prompt itself): bearings in degrees,
+negative = LEFT, positive = RIGHT; `closing` from radial velocity;
+`path` from the depth buffer (median per screen third); `last` is
+one-step feedback so the stateless model sees what its previous pick cost.
+`doom/encoder.py` builds this from `objects_info` + labels + depth.
+Prompt (`doom/config.py`) adds the Doom field manual: pistol ballistics,
+ammo economy, monster guide (Zombieman < ShotgunGuy < ChaingunGuy),
+and tactics (3+ visible = kill-zone, run; retreat is a dead-end wall).
+
 ## How it works
 
 ```
@@ -77,25 +110,26 @@ monster-vs-pickup filtering via label categories.
 |---|---|---|
 | defend_the_center | **4 kills** (6 bullets, 43 decisions) | kill every episode; pistol vs demons caps survival |
 | simpler_basic | **win 2/2**, untouched (hp 100) | strafe-to-center, 1–2 bullets per kill |
-| deadly_corridor (skill 5) | **2 kills**, reward 428 | spawn RNG dominates; death in 50–100 tics is normal |
+| deadly_corridor (skill 5) | **2 kills**, reward 428 (v2 context; kills in ~half of episodes) | spawn RNG decides a third of runs; death in 50–100 tics is normal |
 
 Corridor is genuinely brutal: six hitscanners focus-firing at skill 5 melt
 100hp in ~3 game-seconds in the open. Progress (not kills) is the score;
 tactics that mattered: opening sprint, strafe-fire, never trading stationary.
 
-## Cost (measured, 14-decision corridor episode)
+## Cost (measured, 10-decision corridor episode, v2 context)
 
-Per decision: 794 input / 108 output tokens, 248ms.
+Per decision: 1389 input / 109 output tokens, ~290ms.
 
 | Model | $/MTok in | $/MTok out | Per episode | vs Jev |
 |---|---|---|---|---|
-| **Jev (measured)** | 0.042 | **free** | **$0.0005** | 1x |
-| GPT-5.6 Luna | 0.20 | 1.20 | $0.0040 | 9x |
-| GPT-5.4 Nano | 0.20 | 1.25 | $0.0041 | 9x |
-| Claude Haiku 4.5 | 1.00 | 5.00 | $0.0187 | 40x |
-| GPT-5.6 Terra (same intelligence tier) | 2.00 | 12.00 | $0.0403 | 86x |
+| **Jev (measured)** | 0.042 | **free** | **$0.0006** | 1x |
+| GPT-5.6 Luna | 0.20 | 1.20 | $0.0041 | 7x |
+| GPT-5.4 Nano | 0.20 | 1.25 | $0.0041 | 7x |
+| Claude Haiku 4.5 | 1.00 | 5.00 | $0.0193 | 33x |
+| GPT-5.6 Terra (same intelligence tier) | 2.00 | 12.00 | $0.0409 | 70x |
 
-At ~3.5 decisions/sec for an hour: Jev **$0.34** vs Terra $26.
+At ~3.5 decisions/sec for an hour: Jev **$0.73** vs Terra $51.
+(Richer v2 context nearly doubled input tokens vs v1 — still 70x cheaper.)
 LLM side assumes minimal structured JSON output (a lower bound — real
 reasoning traces cost more and answer in seconds, not 250ms).
 Rates: TypeSafe blog (Jev), OpenAI/Anthropic public pricing (Sep 2026).
@@ -126,3 +160,7 @@ per bullet. Corridor is open season — no human score posted yet.
   turned out to be a kill bonus, not a bug.
 - `runs/` logs are pre-action snapshots; final hp/ammo/kills come from
   game variables and are saved to `.summary.json`.
+- State engineering beat prompt tweaks: per-enemy type/bearing/closing
+  (v2) scores kills where sector buckets (v1) went 0-7.
+- A stateless model can still use feedback: one-step `last` (hp/ammo/kill
+  deltas) lets Jev react to its own mistakes next decision.

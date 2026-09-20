@@ -38,13 +38,15 @@ def run_episode(game, client, log, scenario: str = "defend",
     reset_episode()
     decisions, latencies, shots = 0, [], 0
     last_turn = None
+    prev = None  # feedback for the next snapshot
     while not game.is_episode_finished():
         state = game.get_state()
         if state is None:
             break
         if frames is not None and state.screen_buffer is not None:
             frames.append(state.screen_buffer.transpose(1, 2, 0).copy())
-        snapshot = encode(state, list(state.game_variables))
+        vars_now = list(state.game_variables)
+        snapshot = encode(state, vars_now, last=prev)
         atk_idx = C.ATTACK_IDX.get(scenario, 2)
         try:
             answers, usage, ms = decide(client, snapshot, scenario)
@@ -65,6 +67,17 @@ def run_episode(game, client, log, scenario: str = "defend",
             last_turn = action
         decisions += 1
         latencies.append(ms)
+        # Feedback for the next decision: what the last pick cost/gained.
+        prev = {"action": reason,
+                "hp_change": round(snapshot["player"]["health"] - prev_hp, 1)
+                if decisions > 1 else 0,
+                "ammo_used": round(prev_ammo - snapshot["player"]["ammo"], 1)
+                if decisions > 1 else 0,
+                "kills_change": (snapshot["player"]["kills"] - prev_kills)
+                if decisions > 1 else 0}
+        prev_hp, prev_ammo, prev_kills = (snapshot["player"]["health"],
+                                         snapshot["player"]["ammo"],
+                                         snapshot["player"]["kills"])
         if scenario == "corridor":
             picked = answers["action"]["choice"]
             log({

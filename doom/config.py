@@ -76,26 +76,42 @@ CORRIDOR_QUESTIONS = {
     "action": {
         "type": "choice",
         "instructions": (
-            "Pick ONE action for a lone marine fighting down a corridor "
-            "against 6 armed shooters. Goal: push forward, kill them, survive. "
-            "Ammo remaining: {ammo} bullets. "
-            "Standing in the open while firing gets you killed: if enemies "
-            "are shooting at you, strafe sideways to dodge. "
-            "Attack only when an enemy is centered ahead and visible; "
-            "otherwise move or turn toward the biggest threat. "
-            "path shows nearby walls per sector (wall = blocked that way): "
-            "advance only when center is open."
+            "You are a lone marine with a pistol fighting down a corridor "
+            "against 6 armed shooters at max aggression (they focus fire). "
+            "Goal: push forward, kill them, survive. "
+            "HOW TO READ THE STATE: bearing is degrees, negative = LEFT, "
+            "positive = RIGHT, 0 = straight ahead; |bearing| <= 12 counts as "
+            "centered. dist is world units (~400 = mid-corridor). visible = "
+            "on screen right now. closing = moving toward you. path shows "
+            "nearby walls per sector (wall = blocked that way). last shows "
+            "what your previous pick cost: hp_change (damage taken), "
+            "ammo_used, kills_change. "
+            "YOUR ARSENAL: one pistol, {ammo} bullets left. It fires short "
+            "bursts; every enemy needs multiple hits. Do not waste bullets "
+            "at far range. "
+            "ENEMIES: all hitscan shooters. Zombieman is weak; ShotgunGuy is "
+            "lethal up close; ChaingunGuy deals sustained fire; Demon is a "
+            "melee tank. Kill order: closest VISIBLE shooter first. "
+            "TACTICS: standing in overlapping sightlines kills you in ~3 "
+            "seconds. Count visible enemies: if 3+ are visible at once you "
+            "are IN a kill-zone: pick advance and run out of it, do not "
+            "trade fire from a standstill. If last.hp_change is dropping "
+            "fast, you are standing in fire: strafe sideways (keeps your "
+            "aim) or advance out of it. Retreat is a dead-end wall, never "
+            "retreat twice in a row. "
+            "Advance only when center path is open. If your shots keep "
+            "missing (ammo_used up, kills_change 0), close distance first."
         ),
         "criteria": {
-            "advance": "Move forward down the corridor (path is clear)",
-            "retreat": "Back away from a close threat",
-            "strafe_left": "Sidestep left: dodges incoming fire, keeps aim",
-            "strafe_right": "Sidestep right: dodges incoming fire, keeps aim",
-            "turn_left": "Rotate left toward the threat",
-            "turn_right": "Rotate right toward the threat",
-            "attack": "Fire standing still (accurate, but exposed)",
-            "strafe_left_fire": "Sidestep left while firing (dodges + shoots)",
-            "strafe_right_fire": "Sidestep right while firing (dodges + shoots)",
+            "advance": "Sprint forward: path center open, no close threat",
+            "retreat": "EMERGENCY only: one step back from a point-blank threat",
+            "strafe_left": "Sidestep left under fire, or circle toward a left threat",
+            "strafe_right": "Sidestep right under fire, or circle toward a right threat",
+            "turn_left": "Threat is far left: rotate to face it",
+            "turn_right": "Threat is far right: rotate to face it",
+            "attack": "Clean kill shot: enemy centered AND visible AND close/mid",
+            "strafe_left_fire": "Return fire while sidestepping left (default under fire)",
+            "strafe_right_fire": "Return fire while sidestepping right (default under fire)",
         },
     },
     "danger": {
