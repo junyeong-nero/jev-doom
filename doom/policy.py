@@ -176,6 +176,14 @@ def _corridor_action(answers: dict, snapshot: dict) -> tuple[list, int, str]:
             turn = f"turn_{sector}"
             vec, tics, _ = C.CORRIDOR_ACTIONS[turn]
             return vec, tics, f"{prefix}face threat {sector} (damage, none visible)"
+    # Pickup code gate: take the bigger gun as soon as it can fire.
+    # (Pressing select while already on shotgun is a harmless no-op,
+    # so an unknown selected_weapon still switches.)
+    p = snapshot["player"]
+    if (p.get("shotgun_owned") and p.get("shells", 0) > 0
+            and p.get("selected_weapon") != 3):
+        vec, tics, _ = C.CORRIDOR_ACTIONS["switch_to_shotgun"]
+        return vec, tics, f"{prefix}switch to shotgun"
     pick = answers["action"]
     choice, conf = pick["choice"], pick["confidence"]
     danger = answers["danger"]["score"]

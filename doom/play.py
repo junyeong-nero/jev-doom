@@ -171,6 +171,10 @@ def run_episode(game, client, log, scenario: str = "defend",
                 "hp": snapshot["player"]["health"],
                 "ammo": snapshot["player"]["ammo"],
                 "kills": snapshot["player"]["kills"],
+                "shells": snapshot["player"].get("shells", 0),
+                "shotgun": snapshot["player"].get("shotgun_owned", False),
+                "pickups": {k: (v is not None)
+                            for k, v in snapshot.get("pickups", {}).items()},
                 "focus": focus_id,
             })
         else:

@@ -83,6 +83,7 @@ OBSERVE_TICS = 4         # settle/observe hold after a turn (anti-overshoot)
 MOVE_TICS = 8            # corridor locomotion hold per decision
 FIRE_TICS = 2           # press held 2 tics (see play.py: always followed by release)
 RELEASE_TICS = 2        # release after every shot: pistol is semi-auto, needs re-press
+SWITCH_TICS = 6         # weapon-switch press hold (raise animation)
 SWEEP_CONFIDENCE = 0.8  # below this, keep sweeping last turn direction (anti-jitter)
 CENTER_DEGREES = 6      # |bearing| within this counts as "centered"
 CLOSE_DIST = 300.0      # world units: below = close
@@ -132,6 +133,19 @@ CORRIDOR_QUESTIONS = {
             "seen rather than firing blind. "
             "Advance only when center path is open. If your shots keep "
             "missing (ammo_used up, kills_change 0), close distance first. "
+            "PICKUPS: pickups holds the nearest health / ammo / weapon / "
+            "armor item each (or null when none): dist in world units, "
+            "bearing in degrees (negative = LEFT, positive = RIGHT), "
+            "visible = on screen now. Items are collected by walking over "
+            "them. player.shells is shotgun shells; player.shotgun_owned "
+            "tells if you carry the shotgun; player.selected_weapon is the "
+            "current weapon slot (2 = pistol, 3 = shotgun). "
+            "PRIORITY: (1) health below ~40 with a health item nearby: "
+            "detour to grab it, even under fire. (2) pistol nearly empty "
+            "(5 or fewer bullets) with ammo nearby: grab it before trading "
+            "fire. (3) a dropped shotgun/chaingun nearby: detour to pick "
+            "it up; once the shotgun is owned and shells are available, "
+            "pick switch_to_shotgun. "
             "TARGET LOCK: state.focus is the enemy you are already engaging "
             "(or null when no lock). Hold it until dead (disappears AND kills "
             "ticked up — kills_change attribution is approximate) or fully "
@@ -148,6 +162,7 @@ CORRIDOR_QUESTIONS = {
             "attack": "Clean kill shot: enemy centered AND visible AND close/mid",
             "strafe_left_fire": "Return fire while sidestepping left (default under fire)",
             "strafe_right_fire": "Return fire while sidestepping right (default under fire)",
+            "switch_to_shotgun": "Shotgun owned and shells available: switch to the bigger gun now",
         },
     },
     "danger": {
@@ -162,17 +177,20 @@ CORRIDOR_QUESTIONS = {
 }
 
 # corridor choice -> (button vector, hold tics); buttons =
-# [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK]
+# [FWD, BACK, LEFT, RIGHT, TLEFT, TRIGHT, ATTACK, SELECT_WEAPON3]
+# (SELECT_WEAPON3 appended at END: ATTACK stays index 6).
 CORRIDOR_ACTIONS = {
-    "advance": ([1, 0, 0, 0, 0, 0, 0], MOVE_TICS, "advance"),
-    "retreat": ([0, 1, 0, 0, 0, 0, 0], MOVE_TICS, "retreat"),
-    "strafe_left": ([0, 0, 1, 0, 0, 0, 0], MOVE_TICS, "strafe left"),
-    "strafe_right": ([0, 0, 0, 1, 0, 0, 0], MOVE_TICS, "strafe right"),
-    "turn_left": ([0, 0, 0, 0, 1, 0, 0], TURN_TICS, "turn left"),
-    "turn_right": ([0, 0, 0, 0, 0, 1, 0], TURN_TICS, "turn right"),
-    "attack": ([0, 0, 0, 0, 0, 0, 1], 8, "fire"),  # 8-tic burst: ~2 bullets via auto-refire
-    "strafe_left_fire": ([0, 0, 1, 0, 0, 0, 1], 8, "strafe left + fire"),
-    "strafe_right_fire": ([0, 0, 0, 1, 0, 0, 1], 8, "strafe right + fire"),
+    "advance": ([1, 0, 0, 0, 0, 0, 0, 0], MOVE_TICS, "advance"),
+    "retreat": ([0, 1, 0, 0, 0, 0, 0, 0], MOVE_TICS, "retreat"),
+    "strafe_left": ([0, 0, 1, 0, 0, 0, 0, 0], MOVE_TICS, "strafe left"),
+    "strafe_right": ([0, 0, 0, 1, 0, 0, 0, 0], MOVE_TICS, "strafe right"),
+    "turn_left": ([0, 0, 0, 0, 1, 0, 0, 0], TURN_TICS, "turn left"),
+    "turn_right": ([0, 0, 0, 0, 0, 1, 0, 0], TURN_TICS, "turn right"),
+    "attack": ([0, 0, 0, 0, 0, 0, 1, 0], 8, "fire"),  # 8-tic burst: ~2 bullets via auto-refire
+    "strafe_left_fire": ([0, 0, 1, 0, 0, 0, 1, 0], 8, "strafe left + fire"),
+    "strafe_right_fire": ([0, 0, 0, 1, 0, 0, 1, 0], 8, "strafe right + fire"),
+    "switch_to_shotgun": ([0, 0, 0, 0, 0, 0, 0, 1], SWITCH_TICS,
+                          "switch to shotgun"),
 }
 
 # Code-side survival reflex: at/above this danger, stationary picks
