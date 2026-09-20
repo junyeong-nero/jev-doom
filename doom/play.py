@@ -18,6 +18,20 @@ from .encoder import encode
 from .policy import decide, reset_episode, to_action
 
 
+def _step(game, action: list, tics: int, frames: list | None) -> None:
+    """Apply a hold in 2-tic chunks, capturing frames along the way.
+
+    Same buttons for the same total tics (no behavior change), but video
+    gets a frame every 2 game-tics instead of one per Jev decision.
+    """
+    for done in range(0, tics, 2):
+        game.make_action(action, min(2, tics - done))
+        if frames is not None and not game.is_episode_finished():
+            st = game.get_state()
+            if st is not None and st.screen_buffer is not None:
+                frames.append(st.screen_buffer.transpose(1, 2, 0).copy())
+
+
 def run_episode(game, client, log, scenario: str = "defend",
                 frames: list | None = None) -> dict:
     game.new_episode()
@@ -42,11 +56,11 @@ def run_episode(game, client, log, scenario: str = "defend",
         action, tics, reason = to_action(answers, snapshot, last_turn, scenario)
         if action[atk_idx]:
             shots += 1
-            game.make_action(action, tics)
-            game.make_action([0] * len(action),
-                             C.RELEASE_TICS)  # release: re-press per bullet
+            _step(game, action, tics, frames)
+            _step(game, [0] * len(action),
+                  C.RELEASE_TICS, frames)  # release: re-press per bullet
         else:
-            game.make_action(action, tics)
+            _step(game, action, tics, frames)
         if action in ([1, 0, 0], [0, 1, 0]):
             last_turn = action
         decisions += 1

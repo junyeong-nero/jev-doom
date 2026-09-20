@@ -5,12 +5,13 @@ Jev makes one structured decision per tick — no text, no parsing, just typed
 answers with probabilities. Jev never sees pixels: object positions, angles,
 and a depth-derived wall map are encoded to JSON and sent as state.
 
-## Gameplay (deadly_corridor, skill 5 — 2 kills)
+## Gameplay (deadly_corridor, skill 5)
 
 ![Jev playing](assets/corridor_ep.gif)
 
 Full quality: [assets/corridor_ep.mp4](assets/corridor_ep.mp4)
-(one frame per decision, 8fps timelapse)
+(a frame every 2 game-tics, 8fps — the full episode is ~100 game-tics,
+about 3 seconds of Doom time; skill-5 corridor ends runs fast)
 
 ## Run it
 
