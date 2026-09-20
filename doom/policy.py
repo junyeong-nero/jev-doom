@@ -38,6 +38,10 @@ def decide(client: httpx.Client, snapshot: dict,
 _dodge_side = "strafe_left"
 _corridor_decisions = 0
 
+#: Issue-15 scan state: next low-confidence defend turn. Alternates
+#: L,R,L,R... module-global like _dodge_side (4-tic holds).
+_scan_turn = [0, 1, 0]
+
 
 def _close_threat_ahead(snapshot: dict) -> bool:
     """A close-range threat straight ahead (kiting target)?"""
@@ -75,13 +79,10 @@ _cover_visible_before = 0
 _cover_ttl = 0
 COVER_TTL = 4  # decisions a cover move stays "active" for success check
 
-#: Issue-17 turn balance: cumulative defend turn counts. Low-confidence
-#: sweep continuations that would push one side past 60% flip to the
-#: under-used side (target L/R within 40:60).
+#: Issue-17 turn balance: cumulative defend turn counts (kept for the
+#: scoreboard; strict scan alternation below is inherently balanced).
 _turn_left_n = 0
 _turn_right_n = 0
-TURN_BALANCE_SHARE = 0.6
-TURN_BALANCE_MIN = 4
 
 #: Opening sprint: first N corridor decisions always advance, to clear
 #: the spawn kill-zone before fighting. (Learned from a scripted rush
@@ -93,6 +94,7 @@ def reset_episode() -> None:
     global _corridor_decisions, _last_seen, _prev_hits
     global _cover_active, _cover_visible_before, _cover_ttl
     global _turn_left_n, _turn_right_n
+    global _scan_turn
     _corridor_decisions = 0
     _last_seen = None
     _prev_hits = None
@@ -101,6 +103,7 @@ def reset_episode() -> None:
     _cover_ttl = 0
     _turn_left_n = 0
     _turn_right_n = 0
+    _scan_turn = [0, 1, 0]
 
 
 def _visible_count(snapshot: dict) -> int:
@@ -302,30 +305,13 @@ def _note_turn(vec: list) -> None:
         _turn_right_n += 1
 
 
-def _balanced_sweep(last_turn: list) -> tuple[list, bool]:
-    """Issue-17: bias a low-confidence sweep toward the under-used side.
-
-    Returns (vector, flipped). When one side holds more than
-    TURN_BALANCE_SHARE of turns so far (>= TURN_BALANCE_MIN total),
-    a continuation in that over-used direction flips to the other side.
-    """
-    total = _turn_left_n + _turn_right_n
-    if total < TURN_BALANCE_MIN:
-        return last_turn, False
-    if last_turn == [1, 0, 0] and _turn_left_n / total > TURN_BALANCE_SHARE:
-        return [0, 1, 0], True
-    if last_turn == [0, 1, 0] and _turn_right_n / total > TURN_BALANCE_SHARE:
-        return [1, 0, 0], True
-    return last_turn, False
-
-
 def to_action(answers: dict, snapshot: dict,
               last_turn: list | None = None,
               scenario: str = "defend",
               after_turn: bool = False) -> tuple[list, int, str]:
     """Map answers to ([left, right, attack], hold_tics, reason).
 
-    last_turn: previous turn vector ([1,0,0] or [0,1,0]) for sweep hysteresis.
+    last_turn: unused (kept for call compatibility; low-conf now scans).
     after_turn: previous action was a turn -> one observation decision
         (anti-overshoot) before turning again.
     """
@@ -389,11 +375,11 @@ def to_action(answers: dict, snapshot: dict,
             return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
         return [0, 0, 0], C.TURN_TICS, "aim center"
 
-    # low confidence: keep sweeping instead of jittering, biased toward
-    # the under-used side (issue-17 balance).
-    if last_turn in ([1, 0, 0], [0, 1, 0]):
-        vec, flipped = _balanced_sweep(last_turn)
-        _note_turn(vec)
-        tag = "balanced " if flipped else ""
-        return vec, C.TURN_TICS, f"{tag}sweep conf={aim['confidence']:.2f}"
-    return [0, 0, 0], C.TURN_TICS, f"hold conf={aim['confidence']:.2f}"
+    # low confidence: alternating scan turns instead of freezing
+    # (sweep/hold left the bot standing still while taking fire).
+    # Strict alternation is inherently balanced; still counted for stats.
+    global _scan_turn
+    _scan_turn = ([0, 1, 0] if _scan_turn == [1, 0, 0] else [1, 0, 0])
+    side = "left" if _scan_turn == [1, 0, 0] else "right"
+    _note_turn(_scan_turn)
+    return _scan_turn, C.TURN_TICS, f"scan {side} conf={aim['confidence']:.2f}"
