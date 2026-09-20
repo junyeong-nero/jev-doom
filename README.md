@@ -153,6 +153,12 @@ because proportional turn holds (up to the 100-tic cap) freeze the bot
 while demons chew it. Next bottleneck is cadence, not firing — their bot
 re-aims every 4 tics; ours holds single turns for seconds.
 
+4-tic cadence (all holds → 4: turns capped 100→4, moves 8→4, corridor
+bursts 8→4): seeds 1–5 → kills 3,2,5,2,4 = **3.20±1.17 mean**, 24–38
+decisions, 7.2 shots/ep. The unlock: re-aiming every 4 tics instead of
+freezing mid-turn. Still dies with ~19 bullets left — fire volume is the
+next lever (their bots empty the mag; heuristic does 120+ shots/ep).
+
 Latest corridor suite (same build; SPEED auto-run on locomotion):
 
 | seed | kills | bullets | reward |

@@ -78,12 +78,11 @@ QUESTIONS = {
 
 # Decision thresholds / timing
 FIRE_THRESHOLD = {"defend": 0.4, "basic": 0.5, "simple": 0.5}  # defend loosened: explicit numeric rule fires more (cf. jev-plays-doom rule criteria)
-TURN_TICS = 16           # fallback turn hold when no visible target bears on the sector
+TURN_TICS = 4            # fallback turn hold: their 4-tic cadence
 TURN_DEG_PER_TIC = 0.44  # measured turn rate: proportional holds = round(|bearing| / 0.44)
 TURN_TICS_MIN = 2        # smallest turn: micro-adjusts land at 2-4 tics
-TURN_TICS_MAX = 100      # cap a single hold (~44 deg): re-aim instead of freezing
-OBSERVE_TICS = 4         # settle/observe hold after a turn (anti-overshoot)
-MOVE_TICS = 8            # corridor locomotion hold per decision
+TURN_TICS_MAX = 4        # cap a single hold: re-aim every 4 tics like their bot
+MOVE_TICS = 4            # corridor locomotion hold per decision (their cadence)
 FIRE_TICS = 2           # press held 2 tics (see play.py: always followed by release)
 RELEASE_TICS = 2        # release after every shot: pistol is semi-auto, needs re-press
 SWITCH_TICS = 6         # weapon-switch press hold (raise animation)
@@ -199,9 +198,9 @@ CORRIDOR_ACTIONS = {
     "strafe_right": ([0, 0, 0, 1, 0, 0, 0, 0, 1], MOVE_TICS, "strafe right"),
     "turn_left": ([0, 0, 0, 0, 1, 0, 0, 0, 0], TURN_TICS, "turn left"),
     "turn_right": ([0, 0, 0, 0, 0, 1, 0, 0, 0], TURN_TICS, "turn right"),
-    "attack": ([0, 0, 0, 0, 0, 0, 1, 0, 0], 8, "fire"),  # 8-tic burst: ~2 bullets via auto-refire
-    "strafe_left_fire": ([0, 0, 1, 0, 0, 0, 1, 0, 1], 8, "strafe left + fire"),
-    "strafe_right_fire": ([0, 0, 0, 1, 0, 0, 1, 0, 1], 8, "strafe right + fire"),
+    "attack": ([0, 0, 0, 0, 0, 0, 1, 0, 0], 4, "fire"),  # 4-tic press + release below
+    "strafe_left_fire": ([0, 0, 1, 0, 0, 0, 1, 0, 1], 4, "strafe left + fire"),
+    "strafe_right_fire": ([0, 0, 0, 1, 0, 0, 1, 0, 1], 4, "strafe right + fire"),
     "switch_to_shotgun": ([0, 0, 0, 0, 0, 0, 0, 1, 0], SWITCH_TICS,
                           "switch to shotgun"),
 }
