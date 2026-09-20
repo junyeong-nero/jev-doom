@@ -38,6 +38,10 @@ def decide(client: httpx.Client, snapshot: dict,
 _dodge_side = "strafe_left"
 _corridor_decisions = 0
 
+#: Issue-15 scan state: next low-confidence defend turn. Alternates
+#: L,R,L,R... module-global like _dodge_side (4-tic holds).
+_scan_turn = [0, 1, 0]
+
 
 def _close_threat_ahead(snapshot: dict) -> bool:
     """A close-range threat straight ahead (kiting target)?"""
@@ -75,6 +79,11 @@ _cover_visible_before = 0
 _cover_ttl = 0
 COVER_TTL = 4  # decisions a cover move stays "active" for success check
 
+#: Issue-17 turn balance: cumulative defend turn counts (kept for the
+#: scoreboard; strict scan alternation below is inherently balanced).
+_turn_left_n = 0
+_turn_right_n = 0
+
 #: Opening sprint: first N corridor decisions always advance, to clear
 #: the spawn kill-zone before fighting. (Learned from a scripted rush
 #: scoring +495 vs -16 dodging in place.)
@@ -84,12 +93,17 @@ OPENING_SPRINT = 6
 def reset_episode() -> None:
     global _corridor_decisions, _last_seen, _prev_hits
     global _cover_active, _cover_visible_before, _cover_ttl
+    global _turn_left_n, _turn_right_n
+    global _scan_turn
     _corridor_decisions = 0
     _last_seen = None
     _prev_hits = None
     _cover_active = False
     _cover_visible_before = 0
     _cover_ttl = 0
+    _turn_left_n = 0
+    _turn_right_n = 0
+    _scan_turn = [0, 1, 0]
 
 
 def _visible_count(snapshot: dict) -> int:
@@ -282,13 +296,22 @@ def _turn_tics(snapshot: dict, sector: str) -> tuple[int, float | None]:
     return tics, tgt["bearing"]
 
 
+def _note_turn(vec: list) -> None:
+    """Issue-17: record a defend turn for balance accounting."""
+    global _turn_left_n, _turn_right_n
+    if vec == [1, 0, 0]:
+        _turn_left_n += 1
+    elif vec == [0, 1, 0]:
+        _turn_right_n += 1
+
+
 def to_action(answers: dict, snapshot: dict,
               last_turn: list | None = None,
               scenario: str = "defend",
               after_turn: bool = False) -> tuple[list, int, str]:
     """Map answers to ([left, right, attack], hold_tics, reason).
 
-    last_turn: previous turn vector ([1,0,0] or [0,1,0]) for sweep hysteresis.
+    last_turn: unused (kept for call compatibility; low-conf now scans).
     after_turn: previous action was a turn -> one observation decision
         (anti-overshoot) before turning again.
     """
@@ -329,6 +352,7 @@ def to_action(answers: dict, snapshot: dict,
     if (took_damage and not snapshot["center_visible"]
             and _last_seen in ("left", "right")):
         vec = [1, 0, 0] if _last_seen == "left" else [0, 1, 0]
+        _note_turn(vec)
         return vec, C.TURN_TICS, f"face threat {_last_seen} (damage, none visible)"
 
     # NOTE: no settle-observe after turns (removed): with an explicit numeric
@@ -339,16 +363,38 @@ def to_action(answers: dict, snapshot: dict,
         if aim["choice"] == "left":
             tics, b = _turn_tics(snapshot, "left")
             if b is None:
+                # Issue-17: blind sweep -> turn toward remembered threat.
+                if _last_seen == "right":
+                    tics2, b2 = _turn_tics(snapshot, "right")
+                    _note_turn([0, 1, 0])
+                    return [0, 1, 0], tics2, (
+                        "aim left blind -> face right (memory)"
+                        if b2 is None else f"aim left blind -> face right b={b2}")
+                _note_turn([1, 0, 0])
                 return [1, 0, 0], tics, "aim left (no visible target)"
+            _note_turn([1, 0, 0])
             return [1, 0, 0], tics, f"aim left b={b} tics={tics}"
         if aim["choice"] == "right":
             tics, b = _turn_tics(snapshot, "right")
             if b is None:
+                # Issue-17: blind sweep -> turn toward remembered threat.
+                if _last_seen == "left":
+                    tics2, b2 = _turn_tics(snapshot, "left")
+                    _note_turn([1, 0, 0])
+                    return [1, 0, 0], tics2, (
+                        "aim right blind -> face left (memory)"
+                        if b2 is None else f"aim right blind -> face left b={b2}")
+                _note_turn([0, 1, 0])
                 return [0, 1, 0], tics, "aim right (no visible target)"
+            _note_turn([0, 1, 0])
             return [0, 1, 0], tics, f"aim right b={b} tics={tics}"
         return [0, 0, 0], C.TURN_TICS, "aim center"
 
-    # low confidence: keep sweeping instead of jittering
-    if last_turn in ([1, 0, 0], [0, 1, 0]):
-        return last_turn, C.TURN_TICS, f"sweep conf={aim['confidence']:.2f}"
-    return [0, 0, 0], C.TURN_TICS, f"hold conf={aim['confidence']:.2f}"
+    # low confidence: alternating scan turns instead of freezing
+    # (sweep/hold left the bot standing still while taking fire).
+    # Strict alternation is inherently balanced; still counted for stats.
+    global _scan_turn
+    _scan_turn = ([0, 1, 0] if _scan_turn == [1, 0, 0] else [1, 0, 0])
+    side = "left" if _scan_turn == [1, 0, 0] else "right"
+    _note_turn(_scan_turn)
+    return _scan_turn, C.TURN_TICS, f"scan {side} conf={aim['confidence']:.2f}"
