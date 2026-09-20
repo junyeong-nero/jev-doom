@@ -1,4 +1,4 @@
-from doom import policy
+from doom import heuristic as policy
 from doom.encoder import encode
 from tests.conftest import PLAYER, VARS, label, obj, state
 

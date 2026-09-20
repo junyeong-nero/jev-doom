@@ -9,9 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
-# Secrets — JEV_APIKEY lives in .env, never commit
+# Secrets — TYPESAFE_API_KEY lives in .env, never commit
 .env
 .env.*
+!.env.example
 
 # Doom / experiment artifacts
 runs/

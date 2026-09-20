@@ -34,6 +34,22 @@ def _base_variables() -> list:
 
 
 SCENARIOS = {
+    "defend": {
+        "wad": "defend_the_center.wad",
+        "buttons": [vzd.Button.TURN_LEFT, vzd.Button.TURN_RIGHT, vzd.Button.ATTACK],
+        "variables": _base_variables(),
+    },
+    "basic": {
+        "wad": "basic.wad",
+        "buttons": [vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT, vzd.Button.ATTACK],
+        "variables": _base_variables(),
+    },
+    "simple": {
+        "wad": "simpler_basic.wad",
+        "buttons": [vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT, vzd.Button.ATTACK],
+        "variables": _base_variables(),
+        "skill": 3,
+    },
     "corridor": {
         "wad": "deadly_corridor.wad",
         "buttons": [
@@ -61,7 +77,7 @@ SCENARIOS = {
 }
 
 
-def make_game(scenario: str = "corridor", visible: bool = False,
+def make_game(scenario: str = "defend", visible: bool = False,
               timeout_tics: int = 2100) -> vzd.DoomGame:
     """Create and init a game. Caller owns close()."""
     if scenario not in SCENARIOS:
